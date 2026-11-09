@@ -1,0 +1,24 @@
+{
+  "name": "seal-slides",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Slide decks in Markdown with animated SVG slides, an in-browser editor with git-backed comments and edits, and a session recorder",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/build.mjs && node scripts/serve.mjs site",
+    "test": "node --test test/*.test.mjs",
+    "test:smoke": "node --test --test-concurrency=1 test/smoke/*.test.mjs"
+  },
+  "dependencies": {
+    "js-yaml": "5.5.0",
+    "marked": "18.1.1"
+  },
+  "devDependencies": {
+    "playwright": "1.64.1"
+  }
+}

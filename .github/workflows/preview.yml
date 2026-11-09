@@ -1,0 +1,67 @@
+name: Preview
+
+# Per-PR preview of the site: deploys to the gh-pages branch under
+# /pr-preview/pr-<number>/ and keeps a sticky PR comment with the link. The
+# preview is deployed on open and update and removed when the PR closes. A
+# preview's editor commits to the PR's own branch and comments on the PR.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+permissions: {}
+
+concurrency: preview-${{ github.ref }}
+
+jobs:
+  build:
+    # Previews push to gh-pages, which forks cannot do; same-repo PRs only.
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # Build the PR head, not the merge commit, so the line numbers the
+      # editor comments on are the lines of the PR's files.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run build
+        env:
+          SEAL_SLIDES_REPO: ${{ github.repository }}
+          SEAL_SLIDES_REF: ${{ github.event.pull_request.head.ref }}
+          SEAL_SLIDES_SHA: ${{ github.event.pull_request.head.sha }}
+          SEAL_SLIDES_PR: ${{ github.event.pull_request.number }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: site
+          path: site
+          include-hidden-files: true
+          if-no-files-found: error
+
+  preview:
+    needs: build
+    # A closed PR only removes its preview, so it needs no build.
+    if: >-
+      always() && github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.action == 'closed' || needs.build.result == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 # zizmor: ignore[artipacked]
+        # the preview action pushes gh-pages with the checkout token, so
+        # credentials must persist for this job (unlike the build).
+      - if: github.event.action != 'closed'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: site
+          path: site
+      - uses: rossjrw/pr-preview-action@ffa7509e91a3ec8dfc2e5536c4d5c1acdf7a6de9 # v1.8.1
+        with:
+          source-dir: site

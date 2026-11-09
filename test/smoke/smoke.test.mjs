@@ -1,0 +1,380 @@
+// Headless browser smoke test: navigation, edit mode against a fake GitHub
+// API, and the recorder with Chromium's fake media devices.
+// Run with: npm run test:smoke (needs `npx playwright install chromium` once).
+
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { chromium } from 'playwright';
+import { build } from '../../scripts/build.mjs';
+import { serve } from '../../scripts/serve.mjs';
+
+const REPO = { owner: 'acme', name: 'decks', ref: 'main', sha: 'built-sha', pr: null };
+let dir, server, browser, base;
+
+before(async () => {
+  dir = await mkdtemp(path.join(tmpdir(), 'seal-slides-smoke-'));
+  await build({ outDir: path.join(dir, 'site'), repo: REPO });
+  server = await serve(path.join(dir, 'site'), 0);
+  base = `http://127.0.0.1:${server.address().port}`;
+  browser = await chromium.launch({
+    args: [
+      '--use-fake-ui-for-media-stream',
+      '--use-fake-device-for-media-stream',
+      '--auto-accept-this-tab-capture',
+      '--autoplay-policy=no-user-gesture-required',
+    ],
+  });
+});
+
+after(async () => {
+  if (browser) await browser.close();
+  if (server) await new Promise(r => server.close(r));
+  if (dir) await rm(dir, { recursive: true, force: true });
+});
+
+// A fake api.github.com behind page.route. `state` records what the page sent.
+function fakeGitHub(page, state) {
+  const json = (route, status, body) => route.fulfill({
+    status,
+    contentType: 'application/json',
+    headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, POST, PATCH, PUT, OPTIONS' },
+    body: JSON.stringify(body),
+  });
+  return page.route('https://api.github.com/**', async route => {
+    const req = route.request();
+    const url = new URL(req.url());
+    const p = url.pathname + url.search;
+    const m = req.method();
+    if (m === 'OPTIONS') return json(route, 204, {});
+    const body = req.postData() ? JSON.parse(req.postData()) : null;
+    state.calls.push({ m, p, body, auth: req.headers().authorization || null });
+    if (m === 'GET' && p === '/user') return req.headers().authorization ? json(route, 200, { login: 'octo' }) : json(route, 401, { message: 'Requires authentication' });
+    if (m === 'GET' && p === '/repos/acme/decks') return json(route, 200, { default_branch: 'main', permissions: { push: true } });
+    if (m === 'GET' && p.startsWith('/repos/acme/decks/pulls/comments')) return json(route, 200, state.reviewComments);
+    if (m === 'GET' && p.startsWith('/repos/acme/decks/pulls?state=open')) return json(route, 200, state.pulls);
+    if (m === 'GET' && /^\/repos\/acme\/decks\/pulls\/7\/files/.test(p)) return json(route, 200, state.prFiles);
+    if (m === 'POST' && p === '/repos/acme/decks/git/refs') { state.branch = body.ref.replace('refs/heads/', ''); return json(route, 201, {}); }
+    if (m === 'GET' && p.startsWith('/repos/acme/decks/git/ref/heads/')) return json(route, 200, { object: { sha: 'built-sha' } });
+    if (m === 'GET' && p === '/repos/acme/decks/git/commits/built-sha') return json(route, 200, { tree: { sha: 'tree-1' } });
+    if (m === 'POST' && p === '/repos/acme/decks/git/trees') { state.tree = body; return json(route, 201, { sha: 'tree-2' }); }
+    if (m === 'POST' && p === '/repos/acme/decks/git/commits') return json(route, 201, { sha: 'commit-2', html_url: 'https://github.com/acme/decks/commit/commit-2' });
+    if (m === 'PATCH' && p.startsWith('/repos/acme/decks/git/refs/heads/')) return json(route, 200, {});
+    if (m === 'POST' && p === '/repos/acme/decks/pulls') {
+      state.pulls = [{ number: 7, html_url: 'https://github.com/acme/decks/pull/7', user: { login: 'octo' }, head: { ref: state.branch, sha: 'built-sha', repo: { full_name: 'acme/decks', name: 'decks', owner: { login: 'acme' } } }, base: { ref: 'main' } }];
+      return json(route, 201, state.pulls[0]);
+    }
+    if (m === 'POST' && p === '/repos/acme/decks/pulls/7/comments') {
+      state.review = body;
+      return json(route, 201, { id: 99, ...body, user: { login: 'octo' }, html_url: 'https://github.com/acme/decks/pull/7#discussion_r99', pull_request_url: 'https://api.github.com/repos/acme/decks/pulls/7', created_at: '2026-11-09T12:00:00Z' });
+    }
+    return json(route, 404, { message: `fake GitHub has no ${m} ${p}` });
+  });
+}
+
+async function openDeck(hash = '#1', opts = {}) {
+  const context = await browser.newContext({ viewport: opts.viewport || { width: 1440, height: 900 }, acceptDownloads: true, reducedMotion: 'reduce' });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+  page.on('pageerror', e => errors.push(String(e)));
+  const state = { calls: [], pulls: [], prFiles: [], reviewComments: opts.reviewComments || [] };
+  await fakeGitHub(page, state);
+  await page.goto(`${base}/example/${opts.query || ''}${hash}`);
+  await page.waitForFunction(() => window.sealSlides && document.querySelector('#count').textContent.includes('/'));
+  return { page, context, errors, state };
+}
+
+const count = page => page.locator('#count').textContent();
+
+test('navigation: keys, hash, marks, notes, sources and theme', async () => {
+  const { page, context, errors } = await openDeck('#1');
+  assert.equal(await count(page), '1 / 7');
+  assert.equal(await page.locator('.slide.active h1').textContent(), 'Seal Slides');
+  assert.ok(await page.locator('.slide.active .stage svg use').count() > 0, 'the title drawing places the seal');
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await count(page), '2 / 7');
+  assert.match(page.url(), /#2$/);
+  await page.keyboard.press('End');
+  assert.equal(await count(page), '7 / 7');
+  assert.equal(await page.locator('.slide.active').getAttribute('data-status'), 'next');
+  assert.equal(await page.locator('.slide.active .proofmarks').count(), 1);
+  await page.keyboard.press('Home');
+  assert.equal(await count(page), '1 / 7');
+  await page.locator('#marks button').nth(3).click();
+  assert.equal(await count(page), '4 / 7');
+  assert.ok(await page.locator('.slide.active .stage svg path').count() > 3, 'the pipeline drawing is drawn');
+
+  await page.keyboard.press('n');
+  await page.locator('#notes-panel').waitFor();
+  assert.match(await page.locator('#notes-panel .script').textContent(), /When a slide needs motion/);
+  assert.match(await page.locator('#notes-panel .np-h').textContent(), /Say it in about 0:25 · \d+ words · sources: S/);
+  assert.ok(!/engine\/draw\.js/.test(await page.locator('#notes-panel').textContent()), 'sources stay out of the script');
+
+  // S swaps the script for this slide's sources.
+  await page.keyboard.press('s');
+  await page.locator('#sources-panel').waitFor();
+  assert.ok(await page.locator('#notes-panel').isHidden());
+  assert.match(await page.locator('#sources-panel').textContent(), /Sources for slide 4.*engine\/draw\.js/s);
+  await page.keyboard.press('ArrowLeft');
+  assert.match(await page.locator('#sources-panel').textContent(), /Sources for slide 3.*engine\/loader\.js/s);
+  await page.locator('#sources-panel button', { hasText: 'all slides' }).click();
+  await page.locator('#sources-view').waitFor();
+  assert.equal(await page.locator('#sources-view > ol > li').count(), 7);
+  assert.equal(await page.locator('#sources-view a[href="https://github.com/bitswell-hq/seal-slides#readme"]').count(), 1);
+  await page.locator('#sources-view .src-title button').nth(1).click();
+  assert.equal(await count(page), '2 / 7');
+  assert.ok(await page.locator('#sources-view').isHidden());
+
+  const before = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  await page.keyboard.press('t');
+  const after = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  assert.notEqual(before, after, 'T switches the theme');
+
+  await page.goto(`${base}/example/#5`);
+  await page.waitForFunction(() => document.querySelector('#count').textContent === '5 / 7');
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('portrait windows get the portrait drawing', async () => {
+  const { page, context, errors } = await openDeck('#4', { viewport: { width: 420, height: 860 } });
+  assert.equal(await page.locator('.slide.active .stage svg').getAttribute('viewBox'), '0 0 800 1240');
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('read-only viewers see review comments of open pull requests', async () => {
+  const reviewComments = [{ id: 5, path: 'decks/example/slides/02-folder.md', line: 18, body: 'Is the tree up to date?', user: { login: 'reviewer' }, html_url: 'https://github.com/acme/decks/pull/3#r5', pull_request_url: 'https://api.github.com/repos/acme/decks/pulls/3', created_at: '2026-11-01T10:00:00Z' }];
+  const { page, context, state } = await openDeck('#2', { reviewComments });
+  state.pulls = [{ number: 3 }];
+  await page.reload();
+  await page.locator('#comments-btn:not([hidden])').waitFor();
+  assert.equal(await page.locator('#comments-btn .badge').textContent(), '1');
+  assert.ok(state.calls.every(c => c.auth === null), 'no token is needed to read');
+  await page.locator('#comments-btn').click();
+  await page.locator('#panel-comments .comment').waitFor();
+  assert.match(await page.locator('#panel-comments .comment').textContent(), /reviewer.*line 18.*pull request #3.*Is the tree up to date\?/s);
+  await context.close();
+});
+
+test('edit mode: live preview, script edits, saving and a line comment', async () => {
+  const { page, context, errors, state } = await openDeck('#3');
+  await page.keyboard.press('e');
+  await page.locator('#editor').waitFor();
+  const src = page.locator('#ed-source');
+  assert.match(await src.inputValue(), /^---\ntitle: A slide is a Markdown file/);
+
+  // Live preview of the Markdown.
+  await src.fill((await src.inputValue()).replace('title: A slide is a Markdown file', 'title: Edited in the browser'));
+  await page.waitForFunction(() => document.querySelector('.slide.active h2').textContent === 'Edited in the browser');
+  assert.match(await page.locator('#editor .changed').textContent(), /decks\/example\/slides\/03-markdown\.md/);
+
+  // A YAML error keeps the last good slide and says where.
+  await src.fill((await src.inputValue()).replace('status: now', 'status: [now'));
+  await page.waitForFunction(() => /not valid YAML/.test(document.querySelector('#editor .err').textContent));
+  assert.equal(await page.locator('.slide.active h2').textContent(), 'Edited in the browser');
+  await src.fill((await src.inputValue()).replace('status: [now', 'status: now'));
+  await page.waitForFunction(() => document.querySelector('#editor .err').textContent === '');
+
+  // The script tab writes the notes back into the front matter.
+  await page.locator('#tab-script').click();
+  await page.locator('#ed-script').fill('A new first line.\n\nA second line.');
+  await page.locator('#tab-source').click();
+  assert.match(await src.inputValue(), /notes: \|\n {2}A new first line\.\n\n {2}A second line\.\nsources:/);
+  await page.locator('#tab-sources').click();
+  await page.locator('#ed-sources').fill('One source\n[Two](https://example.org)');
+  await page.locator('#tab-source').click();
+  assert.match(await src.inputValue(), /sources:\n {2}- "One source"\n {2}- "\[Two\]\(https:\/\/example\.org\)"\n---/);
+
+  // Sign in with a token kept in sessionStorage only, then save.
+  await page.locator('#ed-token').fill('github_pat_' + 'x'.repeat(30));
+  await page.locator('#editor .signin button').click();
+  await page.locator('#editor footer').getByText('Signed in as octo').waitFor();
+  assert.equal(await page.evaluate(() => localStorage.length), 0);
+  assert.ok(await page.evaluate(() => sessionStorage.getItem('seal-slides:github-token')));
+  await page.locator('#ed-message').fill('Retitle slide 3');
+  await page.locator('#editor footer button', { hasText: 'Save to GitHub' }).click();
+  await page.locator('#editor footer .result a', { hasText: 'pull request #7' }).waitFor();
+  assert.match(state.branch, /^seal-slides\/example\/octo-\d{8}-\d{6}Z$/);
+  assert.equal(state.tree.tree[0].path, 'decks/example/slides/03-markdown.md');
+  assert.match(state.tree.tree[0].content, /title: Edited in the browser/);
+  assert.equal(state.calls.find(c => c.p === '/repos/acme/decks/pulls' && c.m === 'POST').body.title, 'Retitle slide 3');
+  assert.match(await page.locator('#editor .changed').textContent(), /No changes/);
+
+  // Select text on the slide and comment on it: a review comment on that line.
+  await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => document.querySelector('#count').textContent === '4 / 7');
+  await page.keyboard.press('ArrowLeft');
+  state.prFiles = [{ filename: 'decks/example/slides/03-markdown.md', status: 'modified', patch: '@@ -1,40 +1,40 @@\n' + Array.from({ length: 40 }, (_, i) => ' line ' + (i + 1)).join('\n') }];
+  await page.evaluate(() => {
+    const li = [...document.querySelectorAll('.slide.active .md li')].find(l => l.textContent.includes('status picks its marks'));
+    const r = document.createRange();
+    r.selectNodeContents(li);
+    getSelection().removeAllRanges();
+    getSelection().addRange(r);
+  });
+  await page.locator('#sel-comment:not([hidden])').click();
+  await page.locator('#panel-comments:not([hidden])').waitFor();
+  const anchor = await page.locator('#panel-comments .anchor').textContent();
+  const line = Number(/line (\d+)/.exec(anchor)[1]);
+  const fileText = await src.inputValue();
+  assert.match(fileText.split('\n')[line - 1], /\*\*status\*\* picks its marks/, 'the anchor is the line holding the selected text');
+  await page.locator('#ed-comment').fill('Say which marks.');
+  await page.locator('#panel-comments button', { hasText: 'Post comment' }).click();
+  await page.locator('#panel-comments .result a', { hasText: 'pull request #7' }).waitFor();
+  assert.equal(state.review.line, line);
+  assert.equal(state.review.path, 'decks/example/slides/03-markdown.md');
+  assert.equal(state.review.body, 'Say which marks.');
+  assert.match(await page.locator('#panel-comments .comments').textContent(), /Say which marks\./);
+
+  await page.locator('#editor header button').click();
+  assert.ok(await page.locator('#editor').isHidden());
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+// Decode frames of a recorded file in the page and compare each with every
+// slide as the recorder paints it: the share of pixels that differ clearly.
+async function inspectVideo(page, file, type, probes, area) {
+  return page.evaluate(async ({ b64, type, probes, area }) => {
+    const { paintAll } = await import(new URL('../engine/recorder.js', location.href).href);
+    const snaps = (await paintAll(window.sealSlides)).map(c => c.getContext('2d').getImageData(0, 0, 1920, 1080).data);
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const v = document.createElement('video');
+    v.muted = true;
+    v.src = URL.createObjectURL(new Blob([bytes], { type }));
+    await new Promise((res, rej) => { v.onloadeddata = res; v.onerror = () => rej(new Error('cannot decode the video')); });
+    const out = { w: v.videoWidth, h: v.videoHeight, duration: v.duration, frames: [] };
+    const c = document.createElement('canvas');
+    c.width = 1920; c.height = 1080;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    for (const at of probes) {
+      v.currentTime = at;
+      await new Promise(res => { v.onseeked = res; });
+      g.drawImage(v, 0, 0, 1920, 1080);
+      const f = g.getImageData(0, 0, 1920, 1080).data;
+      const differ = (p, [x0, y0, w, h]) => {
+        let off = 0;
+        for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) {
+          const k = (y * 1920 + x) * 4;
+          if (Math.max(Math.abs(p[k] - f[k]), Math.abs(p[k + 1] - f[k + 1]), Math.abs(p[k + 2] - f[k + 2])) > 64) off++;
+        }
+        return off / (w * h);
+      };
+      out.frames.push({ whole: snaps.map(p => differ(p, [0, 0, 1920, 1080])), panel: snaps.map(p => differ(p, area)) });
+    }
+    return out;
+  }, { b64: file.toString('base64'), type, probes, area });
+}
+
+test('the recorder saves a 1920×1080 video of the slides with microphone audio', async () => {
+  const { page, context, errors } = await openDeck('#1');
+  const recorded = page.evaluate(() => new Promise(r => addEventListener('seal-slides:recording', e => r(e.detail), { once: true })));
+  await page.keyboard.press('r');
+  await page.locator('#rec-count:not([hidden])').waitFor();
+  await page.locator('#rec-panel:not([hidden])').waitFor({ timeout: 20000 });
+  assert.ok(await page.locator('#rec-count').isHidden(), 'the countdown is over');
+  assert.equal(await page.locator('#record-btn').getAttribute('aria-pressed'), 'true');
+  assert.match(await page.locator('#rp-script').textContent(), /This is Seal Slides/);
+  assert.equal(await page.locator('#rec-panel .rp-lim').textContent(), '/ 3:00');
+  assert.match(await page.locator('#rp-cur').textContent(), /Slide 1 of 7 · 0:0\d of about 0:15/);
+  assert.match(await page.locator('#rec-panel .rp-next').textContent(), /Next: One folder per deck/);
+  // Where the panel sits, in video pixels.
+  const area = await page.evaluate(() => {
+    const r = document.getElementById('rec-panel').getBoundingClientRect(), k = 1920 / innerWidth;
+    return [r.left, r.top, r.width, r.height].map(n => Math.round(n * k));
+  });
+  await page.waitForTimeout(1500);
+  await page.keyboard.press('ArrowRight');
+  assert.match(await page.locator('#rp-script').textContent(), /A deck is one folder/);
+  await page.waitForTimeout(800);
+  await page.keyboard.press('p');
+  assert.equal(await page.locator('html').getAttribute('data-recording'), 'paused');
+  assert.equal(await page.locator('#rp-pause').textContent(), 'Resume (P)');
+  const pausedAt = await page.locator('#rp-time').textContent();
+  await page.waitForTimeout(1200);
+  assert.equal(await page.locator('#rp-time').textContent(), pausedAt, 'the clock stops while paused');
+  await page.keyboard.press('p');
+  assert.equal(await page.locator('html').getAttribute('data-recording'), 'recording');
+  await page.waitForTimeout(1000);
+  const download = page.waitForEvent('download');
+  await page.keyboard.press('r');
+  const d = await download;
+  const detail = await recorded;
+  assert.match(d.suggestedFilename(), /^example-\d{8}-\d{4}\.(mp4|webm)$/);
+  assert.deepEqual([detail.width, detail.height], [1920, 1080]);
+  assert.ok(detail.seconds > 2.5 && detail.seconds < 6, `paused time is left out (${detail.seconds}s)`);
+  const file = await readFile(await d.path());
+  assert.equal(file.length, detail.size);
+  if (detail.type.startsWith('video/mp4')) {
+    assert.equal(file.subarray(4, 8).toString('latin1'), 'ftyp');
+    assert.ok(file.includes('mp4a'), 'an AAC audio track');
+  } else assert.ok(file.includes('A_OPUS'), 'an Opus audio track');
+  assert.match(await page.locator('#rec-msg').textContent(), /Saved example-.*1920×1080.*nothing was uploaded/);
+  assert.ok(await page.locator('#rec-panel').isHidden());
+  assert.equal(await page.locator('html').getAttribute('data-recording'), null);
+
+  // The first frames are the title slide and the last ones slide 2, as painted,
+  // with nothing of the presenter panel (a fifth of the frame) over them.
+  const v = await inspectVideo(page, file, detail.type, [0.3, detail.seconds - 0.4], area);
+  assert.deepEqual([v.w, v.h], [1920, 1080]);
+  const [first, last] = v.frames;
+  const pct = x => (x * 100).toFixed(2) + '%';
+  assert.ok(first.whole[0] < 0.005, `the first frame is slide 1 (${pct(first.whole[0])} differ)`);
+  assert.ok(last.whole[1] < 0.005, `the last frame is slide 2 (${pct(last.whole[1])} differ)`);
+  assert.ok(first.whole[1] > 0.02 && last.whole[0] > 0.02, 'the two slides look different');
+  assert.ok(first.panel[0] < 0.005 && last.panel[1] < 0.005, `the panel's area shows the slide, not the panel (${pct(first.panel[0])}, ${pct(last.panel[1])})`);
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('a blocked microphone records nothing and says why; Escape cancels the countdown', async () => {
+  const { page, context } = await openDeck('#1');
+  await page.evaluate(() => {
+    const md = navigator.mediaDevices;
+    const orig = md.getUserMedia.bind(md);
+    window.blockMic = true;
+    md.getUserMedia = c => (window.blockMic ? Promise.reject(new DOMException('denied', 'NotAllowedError')) : orig(c));
+  });
+  await page.keyboard.press('r');
+  await page.locator('#rec-msg.err').waitFor();
+  assert.match(await page.locator('#rec-msg').textContent(), /microphone was blocked, so nothing was recorded/);
+  assert.equal(await page.locator('html').getAttribute('data-recording'), null);
+  await page.evaluate(() => { window.blockMic = false; });
+  await page.keyboard.press('r');
+  await page.locator('#rec-count b').waitFor({ timeout: 20000 });
+  await page.keyboard.press('Escape');
+  await page.locator('#rec-msg').getByText('Recording cancelled; nothing was saved.').waitFor();
+  assert.ok(await page.locator('#rec-count').isHidden());
+  assert.equal(await page.locator('html').getAttribute('data-recording'), null);
+  await context.close();
+});
+
+test('each painted slide matches the slide as the browser shows it at 1920×1080', async () => {
+  const { page, context, errors } = await openDeck('#1', { viewport: { width: 1920, height: 1080 } });
+  await page.addStyleTag({ content: '.chrome { display: none !important; }' });
+  const shots = await page.evaluate(async () => {
+    const { paintAll } = await import(new URL('../engine/recorder.js', location.href).href);
+    const canvases = await paintAll(window.sealSlides);
+    return canvases.map(c => c.toDataURL('image/png'));
+  });
+  assert.equal(shots.length, 7);
+  for (let i = 0; i < shots.length; i++) {
+    await page.evaluate(n => window.sealSlides.go(n), i);
+    await page.waitForTimeout(150);
+    const live = (await page.screenshot()).toString('base64');
+    const diff = await page.evaluate(async ({ a, b }) => {
+      const load = async src => { const im = new Image(); im.src = src; await im.decode(); const c = document.createElement('canvas'); c.width = 1920; c.height = 1080; const g = c.getContext('2d'); g.drawImage(im, 0, 0, 1920, 1080); return g.getImageData(0, 0, 1920, 1080).data; };
+      const [p, q] = await Promise.all([load(a), load('data:image/png;base64,' + b)]);
+      let off = 0;
+      for (let k = 0; k < p.length; k += 4) if (Math.max(Math.abs(p[k] - q[k]), Math.abs(p[k + 1] - q[k + 1]), Math.abs(p[k + 2] - q[k + 2])) > 64) off++;
+      return off / (p.length / 4);
+    }, { a: shots[i], b: live });
+    assert.ok(diff < 0.01, `slide ${i + 1}: ${(diff * 100).toFixed(2)}% of pixels differ from the live slide`);
+  }
+  assert.deepEqual(errors, []);
+  await context.close();
+});
