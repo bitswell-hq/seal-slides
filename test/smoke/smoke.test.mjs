@@ -11,14 +11,12 @@ import { chromium } from 'playwright';
 import { build } from '../../scripts/build.mjs';
 import { serve } from '../../scripts/serve.mjs';
 
-const REPO = { owner: 'acme', name: 'decks', ref: 'main', sha: 'built-sha', pr: null };
+const REPO = { owner: 'acme', name: 'decks', ref: 'main', sha: 'built-sha' };
 let dir, server, browser, base;
 
 before(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'seal-slides-smoke-'));
   await build({ outDir: path.join(dir, 'site'), repo: REPO });
-  // A pull-request preview sits beside the published site, on the same origin.
-  await build({ outDir: path.join(dir, 'site', 'pr-preview', 'pr-12'), repo: { ...REPO, ref: 'feature/deck', pr: 12 } });
   server = await serve(path.join(dir, 'site'), 0);
   base = `http://127.0.0.1:${server.address().port}`;
   browser = await chromium.launch({
@@ -56,7 +54,7 @@ function fakeGitHub(page, state) {
     if (m === 'GET' && p === '/user') return req.headers().authorization ? json(route, 200, { login: 'octo' }) : json(route, 401, { message: 'Requires authentication' });
     if (m === 'GET' && p === '/repos/acme/decks') return json(route, 200, { default_branch: 'main', permissions: { push: true } });
     if (m === 'GET' && p.startsWith('/repos/acme/decks/pulls/comments')) return json(route, 200, state.reviewComments);
-    if (m === 'GET' && p.startsWith('/repos/acme/decks/pulls/12/comments')) return json(route, 200, state.reviewComments);
+    if (m === 'GET' && p.startsWith('/repos/acme/decks/commits?sha=')) return json(route, 200, [{ author: { login: state.lastAuthor || 'octo' } }]);
     if (m === 'GET' && p.startsWith('/repos/acme/decks/pulls?state=open')) return json(route, 200, state.pulls);
     if (m === 'GET' && /^\/repos\/acme\/decks\/pulls\/7\/files/.test(p)) return json(route, 200, state.prFiles);
     const held = m === 'GET' && /^\/repos\/acme\/decks\/contents\/([^?]+)\?ref=/.exec(p);
@@ -87,7 +85,7 @@ async function openDeck(hash = '#1', opts = {}) {
   page.on('pageerror', e => errors.push(String(e)));
   const state = { calls: [], pulls: [], prFiles: [], contents: {}, reviewComments: opts.reviewComments || [] };
   await fakeGitHub(page, state);
-  await page.goto(`${base}${opts.root || ''}/example/${opts.query || ''}${hash}`);
+  await page.goto(`${base}/example/${opts.query || ''}${hash}`);
   await page.waitForFunction(() => window.sealSlides && document.querySelector('#count').textContent.includes('/'));
   return { page, context, errors, state };
 }
@@ -333,50 +331,66 @@ test('edit mode: signing in loads the viewer\'s open pull request, and the next 
   await context.close();
 });
 
-test('edit mode: signing in redraws a drawing the viewer\'s open pull request changed', async () => {
+test('edit mode: a drawing the viewer\'s open pull request changed runs only when they load it', async () => {
   const { page, context, errors, state } = await openDeck('#1');
-  assert.ok(await page.locator('.slide.active .stage svg use').count() > 0, 'the built drawing places the seal');
+  const seals = () => page.locator('.slide.active .stage svg use').count();
+  assert.ok(await seals() > 0, 'the built drawing places the seal');
   await page.keyboard.press('e');
   await page.locator('#editor').waitFor();
   const file = 'decks/example/animations/dial.js';
+  const theirs = 'window.ranFromBranch = true;\nexport default { viewBox: [\'0 0 800 800\', \'0 0 800 800\'], draw(c) { c.circle(400, 400, 100, { k: \'now\', w: 1 }); } };\n';
   state.pulls = [{ number: 7, html_url: 'https://github.com/acme/decks/pull/7', user: { login: 'octo' }, head: { ref: 'seal-slides/example/octo-1', sha: 'pr-head', repo: { full_name: 'acme/decks', name: 'decks', owner: { login: 'acme' } } }, base: { ref: 'main' } }];
   state.prFiles = [{ filename: file, status: 'modified' }];
-  state.contents[file] = 'export default { viewBox: [\'0 0 800 800\', \'0 0 800 800\'], draw(c) { c.circle(400, 400, 100, { k: \'now\', w: 1 }); } };\n';
+  state.contents[file] = theirs;
+  state.lastAuthor = 'mallory';
 
+  // Signing in and opening the Drawing tab show the built module and run nothing from the branch.
   await signIn(page);
+  await page.locator('#editor footer').getByText('It changes dial.js, which is not drawn until you load it in the Drawing tab.').waitFor();
+  await page.locator('#tab-drawing').click();
+  await page.locator('#ed-pr-drawing:not([hidden])').waitFor();
+  assert.match(await page.locator('#ed-pr-drawing').textContent(), /pull request #7 holds another version of dial\.js, last changed there by mallory/);
+  const draw = page.locator('#ed-drawing');
+  assert.match(await draw.inputValue(), /The title drawing/);
+  assert.equal(await draw.evaluate(t => t.readOnly), true, 'the built text is not edited over the pull request\'s');
+  assert.ok(await seals() > 0);
+  assert.equal(await page.evaluate(() => window.ranFromBranch), undefined);
+
+  await page.locator('#ed-pr-drawing button', { hasText: 'Load drawing from your PR' }).click();
   await page.waitForFunction(() => document.querySelectorAll('.slide.active .stage svg use').length === 0 && document.querySelectorAll('.slide.active .stage svg circle').length === 1);
+  assert.equal(await page.evaluate(() => window.ranFromBranch), true);
+  assert.equal(await draw.inputValue(), theirs);
+  assert.equal(await draw.evaluate(t => t.readOnly), false);
+  assert.ok(await page.locator('#ed-pr-drawing').isHidden());
   assert.match(await page.locator('#editor footer').textContent(), /Editing dial\.js as saved in your open pull request #7/);
   assert.match(await page.locator('#editor .changed').textContent(), /No changes/);
-  assert.equal(await page.locator('#tab-source').getAttribute('aria-selected'), 'true', 'the Drawing tab was never opened');
   assert.deepEqual(errors, []);
   await context.close();
 });
 
-test('a pull-request preview is read-only: its comments show, with no edit mode and no sign-in', async () => {
-  const reviewComments = [{ id: 6, path: 'decks/example/slides/02-folder.md', line: 18, body: 'Looks right.', user: { login: 'reviewer' }, html_url: 'https://github.com/acme/decks/pull/12#r6', pull_request_url: 'https://api.github.com/repos/acme/decks/pulls/12', created_at: '2026-11-01T10:00:00Z' }];
-  const { page, context, errors, state } = await openDeck('#2', { root: '/pr-preview/pr-12', query: '?edit=1', reviewComments });
-  await page.locator('#comments-btn:not([hidden])').waitFor();
-  assert.equal(await page.locator('#edit-btn').count(), 0, 'no edit button');
-  await page.keyboard.press('e');
-  await page.waitForTimeout(300);
-  assert.equal(await page.locator('#editor').count(), 0, 'neither ?edit=1 nor E opens an editor');
+test('edit mode: no sign-in in a page another page opened or framed', async () => {
+  const { page, context, errors, state } = await openDeck('#3');
+  const refused = async target => {
+    await target.locator('#editor').waitFor();
+    await target.locator('#editor .signin').getByText('Signing in is off here').waitFor();
+    assert.equal(await target.locator('#ed-token').count(), 0, 'no token field');
+    assert.equal(await target.locator('#ed-source').evaluate(t => t.readOnly), true, 'nothing can be edited');
+  };
+  const [popup] = await Promise.all([
+    context.waitForEvent('page'),
+    page.evaluate(() => { window.open(location.pathname + '?edit=1#3'); }),
+  ]);
+  await refused(popup);
 
-  await page.locator('#comments-btn').click();
-  await page.locator('#panel-comments .comment').waitFor();
-  assert.match(await page.locator('#panel-comments .comment').textContent(), /reviewer.*line 18.*pull request #12.*Looks right\./s);
-  assert.equal(await page.locator('#ed-token, #ed-comment, #ed-message').count(), 0, 'no sign-in, comment box or save');
-  assert.equal(await page.locator('#editor textarea:visible, #editor input:visible, #editor [role="tab"]:visible').count(), 0, 'nothing to type in');
+  await page.goto(`${base}/`);
   await page.evaluate(() => {
-    const r = document.createRange();
-    r.selectNodeContents(document.querySelector('.slide.active h2'));
-    getSelection().removeAllRanges();
-    getSelection().addRange(r);
+    const f = document.createElement('iframe');
+    f.src = 'example/?edit=1#3';
+    f.style.cssText = 'width:1200px;height:800px';
+    document.body.append(f);
   });
-  await page.waitForTimeout(300);
-  assert.ok(await page.locator('#sel-comment').isHidden(), 'selecting text offers no comment');
-  assert.ok(state.calls.length > 0 && state.calls.every(c => c.m === 'GET' && c.auth === null), 'the preview only reads, without a token');
-  await page.locator('#editor header button').click();
-  assert.ok(await page.locator('#editor').isHidden());
+  await refused(page.frameLocator('iframe'));
+  assert.ok(state.calls.every(c => c.auth === null), 'no token was sent');
   assert.deepEqual(errors, []);
   await context.close();
 });

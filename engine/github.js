@@ -122,9 +122,8 @@ export function commentBody(anchor, body, inDiff) {
 const stamp = d => d.toISOString().replace(/\.\d+Z$/, 'Z').replace(/[-:]/g, '').replace('T', '-');
 
 // One deck in one repository, as the page was built: repo is
-// { owner, name, ref, sha, pr } where ref is the branch the page was built
-// from, sha its commit and pr the pull request a preview belongs to. A
-// preview is read-only: it lists its pull request's comments and saves nothing.
+// { owner, name, ref, sha } where ref is the branch the page was built from
+// and sha its commit.
 export class DeckStore {
   constructor({ client, repo, deckDir, now = () => new Date(), sleep = ms => new Promise(r => setTimeout(r, ms)) }) {
     this.client = client;
@@ -190,18 +189,23 @@ export class DeckStore {
 
   // The deck's files as the viewer's open pull request holds them, by path,
   // so that the next edit builds on the last one rather than on the page as
-  // built. Null when the viewer has no open pull request.
+  // built, and who last changed each on the branch. Null when the viewer has
+  // no open pull request.
   async pending() {
     const { pr, home } = await this.lookup();
     if (!pr) return null;
     const changed = await this.client.get(`${this.base}/pulls/${pr.number}/files?per_page=100`);
     const files = new Map();
+    const authors = new Map();
     for (const x of changed) {
       if (x.status === 'removed' || !x.filename.startsWith(this.deckDir + '/') || x.filename.startsWith(this.deckDir + '/comments/')) continue;
       const text = await this.readFile(home.owner, home.name, x.filename, pr.head.ref);
-      if (text != null) files.set(x.filename, text);
+      if (text == null) continue;
+      files.set(x.filename, text);
+      const [last] = await this.client.get(`/repos/${seg(home.owner)}/${seg(home.name)}/commits?sha=${encodeURIComponent(pr.head.ref)}&path=${encodeURIComponent(x.filename)}&per_page=1`);
+      if (last) authors.set(x.filename, last.author ? last.author.login : last.commit.author.name);
     }
-    return { pr: { number: pr.number, url: pr.html_url }, branch: pr.head.ref, files };
+    return { pr: { number: pr.number, url: pr.html_url }, branch: pr.head.ref, files, authors };
   }
 
   async createBranch(t) {
@@ -269,7 +273,7 @@ export class DeckStore {
         head: t.fork ? `${t.owner}:${t.branch}` : t.branch,
         base: t.baseRef,
         body: body || `Opened from the seal-slides editor for \`${this.deckDir}\`.`,
-        maintainer_can_modify: true,
+        maintainer_can_modify: false,
       });
     }
     return {
@@ -320,15 +324,10 @@ export class DeckStore {
     return { kind: 'file', url: r.commit.url, pr: r.pr, path, comment: { ...parseCommentFile(content, path), url: r.commit.url } };
   }
 
-  // Review comments of open pull requests on files of this deck. A preview
-  // page shows its own pull request's comments.
+  // Review comments of open pull requests on files of this deck.
   async listComments() {
     const c = this.client;
     const inDeck = x => x.path && x.path.startsWith(this.deckDir + '/');
-    if (this.repo.pr) {
-      const list = await c.get(`${this.base}/pulls/${this.repo.pr}/comments?per_page=100`);
-      return list.filter(inDeck).map(normalizeReviewComment);
-    }
     const [pulls, list] = await Promise.all([
       c.get(`${this.base}/pulls?state=open&per_page=100`),
       c.get(`${this.base}/pulls/comments?sort=created&direction=desc&per_page=100`),

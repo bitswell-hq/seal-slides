@@ -7,7 +7,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { build, repoInfo } from '../scripts/build.mjs';
 
-const REPO = { owner: 'acme', name: 'decks', ref: 'main', sha: 'abc123', pr: null };
+const REPO = { owner: 'acme', name: 'decks', ref: 'main', sha: 'abc123' };
 
 test('the example deck builds to a static site', async () => {
   const out = await mkdtemp(path.join(tmpdir(), 'seal-slides-build-'));
@@ -74,8 +74,7 @@ test('the build reports every broken slide with its file and line', async () => 
 });
 
 test('repository details come from flags, then the environment', () => {
-  assert.deepEqual(repoInfo({ repo: 'a/b', ref: 'main', sha: 's', pr: '4' }, {}), { owner: 'a', name: 'b', ref: 'main', sha: 's', pr: 4 });
-  assert.deepEqual(repoInfo({}, { SEAL_SLIDES_REPO: 'c/d', SEAL_SLIDES_REF: 'dev', SEAL_SLIDES_SHA: 't', SEAL_SLIDES_PR: '' }), { owner: 'c', name: 'd', ref: 'dev', sha: 't', pr: null });
+  assert.deepEqual(repoInfo({ repo: 'a/b', ref: 'main', sha: 's' }, {}), { owner: 'a', name: 'b', ref: 'main', sha: 's' });
+  assert.deepEqual(repoInfo({}, { SEAL_SLIDES_REPO: 'c/d', SEAL_SLIDES_REF: 'dev', SEAL_SLIDES_SHA: 't' }), { owner: 'c', name: 'd', ref: 'dev', sha: 't' });
   assert.throws(() => repoInfo({ repo: 'nope' }, {}), /owner\/name/);
-  assert.throws(() => repoInfo({ repo: 'a/b', pr: 'x' }, {}), /--pr must be a number/);
 });

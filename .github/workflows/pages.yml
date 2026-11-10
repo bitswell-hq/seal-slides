@@ -1,9 +1,7 @@
 name: Pages
 
 # Builds every deck under decks/ and publishes site/ on the gh-pages branch,
-# which GitHub Pages serves. Pull-request previews (preview.yml) live under
-# /pr-preview/ on the same branch; clean-exclude keeps a production deploy
-# from removing them.
+# which GitHub Pages serves.
 on:
   push:
     branches: [main]
@@ -58,5 +56,4 @@ jobs:
         with:
           folder: site
           branch: gh-pages
-          clean-exclude: pr-preview
           force: false

@@ -5,10 +5,9 @@
 //   site/<deck>/index.html     the deck page, with the deck's Markdown embedded
 //   site/<deck>/...            the deck's drawings, styles and assets
 // Usage: node scripts/build.mjs [--decks decks] [--out site]
-//          [--repo owner/name] [--ref branch] [--sha commit] [--pr number]
+//          [--repo owner/name] [--ref branch] [--sha commit]
 // The repository fields tell the editor where to save; they default to the
-// SEAL_SLIDES_* environment variables, then to the local git checkout. --pr
-// builds a read-only preview of that pull request: no editing, its comments shown.
+// SEAL_SLIDES_* environment variables, then to the local git checkout.
 
 import { readFile, writeFile, mkdir, readdir, rm, copyFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -49,10 +48,7 @@ export function repoInfo(args = {}, env = process.env) {
   if (!owner || !name) throw new Error(`--repo must be owner/name, not ${full}`);
   const ref = args.ref || env.SEAL_SLIDES_REF || git('rev-parse', '--abbrev-ref', 'HEAD') || null;
   const sha = args.sha || env.SEAL_SLIDES_SHA || git('rev-parse', 'HEAD') || null;
-  const prRaw = args.pr || env.SEAL_SLIDES_PR || '';
-  const pr = prRaw ? Number(prRaw) : null;
-  if (prRaw && !Number.isInteger(pr)) throw new Error(`--pr must be a number, not ${prRaw}`);
-  return { owner, name, ref: ref === 'HEAD' ? null : ref, sha, pr };
+  return { owner, name, ref: ref === 'HEAD' ? null : ref, sha };
 }
 
 async function listFiles(dir) {
@@ -228,8 +224,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       repo,
     });
     for (const d of summary) console.log(`built ${d.slug}: ${d.slides} slides`);
-    if (repo && repo.pr) console.log(`read-only preview of ${repo.owner}/${repo.name} pull request ${repo.pr}`);
-    else if (repo) console.log(`editor saves to ${repo.owner}/${repo.name}${repo.ref ? ' from ' + repo.ref : ''}`);
+    if (repo) console.log(`editor saves to ${repo.owner}/${repo.name}${repo.ref ? ' from ' + repo.ref : ''}`);
   } catch (e) {
     console.error(e.message);
     process.exit(1);

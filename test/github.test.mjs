@@ -32,7 +32,7 @@ function fakeGitHub(routes) {
   return { fetch, calls, paths: () => calls.map(c => `${c.method} ${c.path}`) };
 }
 
-const REPO = { owner: 'acme', name: 'decks', ref: 'main', sha: 'built-sha', pr: null };
+const REPO = { owner: 'acme', name: 'decks', ref: 'main', sha: 'built-sha' };
 const NOW = () => new Date('2026-11-09T12:34:56.789Z');
 const store = (gh, repo = REPO, token = 'github_pat_test') =>
   new DeckStore({ client: new GitHubClient({ token, fetch: gh.fetch }), repo, deckDir: 'decks/example', now: NOW, sleep: async () => {} });
@@ -178,6 +178,10 @@ test('a second edit builds on the viewer\'s open pull request, not on the page a
       assert.equal(decodeURIComponent(m[2]), branch);
       return m[1] in onBranch ? { content: b64(onBranch[m[1]]) } : R(404, { message: 'Not Found' });
     }],
+    ['GET', /^\/repos\/acme\/decks\/commits\?sha=([^&]+)&path=([^&]+)&per_page=1$/, m => {
+      assert.equal(decodeURIComponent(m[1]), branch);
+      return decodeURIComponent(m[2]).endsWith('dial.js') ? [{ author: { login: 'mallory' }, commit: { author: { name: 'Mallory' } } }] : [{ author: null, commit: { author: { name: 'Octo Cat' } } }];
+    }],
     ['POST', /^\/repos\/acme\/decks\/git\/trees$/, (_, body) => { tree = body; return R(201, { sha: 'new-tree' }); }],
     ...commitRoutes('acme', 'decks', branch, 'branch-head'),
   ]);
@@ -186,6 +190,7 @@ test('a second edit builds on the viewer\'s open pull request, not on the page a
   assert.deepEqual(p.pr, { number: 3, url: 'https://github.com/acme/decks/pull/3' });
   assert.equal(p.branch, branch);
   assert.deepEqual([...p.files], [[path, 'T1'], ['decks/example/animations/dial.js', 'draw 1']]);
+  assert.deepEqual([...p.authors], [[path, 'Octo Cat'], ['decks/example/animations/dial.js', 'mallory']], 'who last changed each file on the branch');
   assert.ok(!gh.paths().some(x => !x.startsWith('GET ')), 'looking writes nothing');
 
   // The page was built with T0. Saving from T0 is refused; saving from what pending() loaded goes through.
@@ -237,6 +242,7 @@ test('without push access, pending and saveEdit use the pull request\'s fork bra
     ['GET', /^\/repos\/acme\/decks\/pulls\?state=open/, () => [pull]],
     ['GET', /^\/repos\/acme\/decks\/pulls\/9\/files/, () => [{ filename: path, status: 'modified' }]],
     ['GET', /^\/repos\/octo\/decks\/contents\//, () => ({ content: b64('T1') })],
+    ['GET', /^\/repos\/octo\/decks\/commits\?sha=/, () => [{ author: { login: 'octo' } }]],
     ...commitRoutes('octo', 'decks', branch, 'fork-head'),
   ]);
   const s = store(gh);
@@ -263,7 +269,7 @@ test('without push access, saveEdit forks, branches in the fork and opens a cros
     ['POST', /^\/repos\/acme\/decks\/pulls$/, (_, body) => {
       assert.equal(body.head, `octo:${branch}`);
       assert.equal(body.base, 'main');
-      assert.equal(body.maintainer_can_modify, true);
+      assert.equal(body.maintainer_can_modify, false, 'only the viewer can push to the branch of their fork');
       return R(201, { number: 9, html_url: 'https://github.com/acme/decks/pull/9' });
     }],
   ]);
@@ -405,15 +411,6 @@ test('listComments keeps review comments of open pull requests on this deck\'s f
   assert.equal(list[1].outdated, true);
   assert.equal(list[1].line, 7);
   assert.equal(gh.calls[0].headers.Authorization, undefined, 'read-only viewers need no token');
-});
-
-test('a preview lists its own pull request\'s comments', async () => {
-  const gh = fakeGitHub([
-    ['GET', /^\/repos\/acme\/decks\/pulls\/12\/comments/, () => [{ id: 1, path: 'decks/example/slides/01.md', line: 2, body: 'x', pull_request_url: '/pulls/12', subject_type: 'line' }]],
-  ]);
-  const list = await store(gh, { ...REPO, pr: 12 }, null).listComments();
-  assert.equal(list.length, 1);
-  assert.equal(list[0].pr, 12);
 });
 
 test('commentBody quotes the anchor for file-level comments only', () => {

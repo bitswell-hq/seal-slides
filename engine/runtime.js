@@ -166,8 +166,6 @@ export async function mountDeck({ data, model, slug }) {
   const still = () => reduce.matches || root.classList.contains('still');
   const qs = new URLSearchParams(location.search);
   const themeKey = `seal-slides:${slug}:theme`;
-  // A pull-request preview shows the slides and their comments and edits nothing.
-  const readOnly = !!(data.repo && data.repo.pr);
 
   root.lang = deckModel.lang || 'en';
   document.title = deckModel.title || document.title;
@@ -221,7 +219,7 @@ export async function mountDeck({ data, model, slug }) {
     btn('notes-btn', 'Speaker script (N)', 'notes', { 'aria-pressed': 'false' }),
     btn('sources-btn', 'Sources (S)', 'sources', { 'aria-pressed': 'false' }),
     commentsBtn,
-    readOnly ? null : btn('edit-btn', 'Edit (E)', 'edit', { 'aria-pressed': 'false' }),
+    btn('edit-btn', 'Edit (E)', 'edit', { 'aria-pressed': 'false' }),
     btn('record-btn', 'Record a video (R)', 'record', { 'aria-pressed': 'false' }),
     btn('theme-btn', 'Switch theme (T)', 'theme'),
     btn('next', 'Next slide', 'next'),
@@ -390,7 +388,7 @@ export async function mountDeck({ data, model, slug }) {
   $('#notes-btn').addEventListener('click', () => toggleNotes());
   $('#sources-btn').addEventListener('click', () => toggleSources());
   $('#theme-btn').addEventListener('click', toggleTheme);
-  if (!readOnly) $('#edit-btn').addEventListener('click', () => (editor && editor.isOpen() ? editor.close() : openEditor()));
+  $('#edit-btn').addEventListener('click', () => (editor && editor.isOpen() ? editor.close() : openEditor()));
   $('#record-btn').addEventListener('click', e => { e.currentTarget.blur(); toggleRecord(); });
   commentsBtn.addEventListener('click', () => openEditor({ tab: 'comments' }));
 
@@ -411,7 +409,7 @@ export async function mountDeck({ data, model, slug }) {
     else if (k === 'n' || k === 'N') toggleNotes();
     else if (k === 's' || k === 'S') toggleSources();
     else if (k === 't' || k === 'T') toggleTheme();
-    else if ((k === 'e' || k === 'E') && !readOnly && !root.dataset.recording) { if (editor && editor.isOpen()) editor.close(); else openEditor(); }
+    else if ((k === 'e' || k === 'E') && !root.dataset.recording) { if (editor && editor.isOpen()) editor.close(); else openEditor(); }
     else if (k === 'r' || k === 'R') toggleRecord();
     else if ((k === 'p' || k === 'P') && recorder) recorder.pause();
   });
@@ -450,7 +448,6 @@ export async function mountDeck({ data, model, slug }) {
     data, model, slug, deckEl, icons,
     get cur() { return cur; },
     get slides() { return slides; },
-    readOnly,
     get comments() { return comments; },
     go, next, prev, still, isTall,
     on(ev, fn) { (listeners[ev] = listeners[ev] || []).push(fn); },
@@ -489,6 +486,6 @@ export async function mountDeck({ data, model, slug }) {
 
   if (qs.get('notes') === '1') toggleNotes(true);
   if (qs.get('sources') === '1') toggleSources(true);
-  if (qs.get('edit') === '1' && !readOnly) openEditor();
+  if (qs.get('edit') === '1') openEditor();
   return api;
 }
