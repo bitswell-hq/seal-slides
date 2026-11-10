@@ -78,7 +78,7 @@ The body is ordinary Markdown (GitHub-flavoured): paragraphs, lists,
 | `duration` | Target time for the slide, as `m:ss` or seconds. The script panel and the recorder show it. |
 | `notes` | The spoken script: short lines read aloud, one per line. Inline Markdown works. A list of strings works too. |
 | `sources` | Where the slide's claims come from, one string per source; inline Markdown links work. They are shown apart from the script. |
-| `draw` | A drawing module for an animated slide, as a path inside the deck folder (see Animated slides). |
+| `draw` | A drawing module for an animated slide, as a path inside the deck folder (see Animated slides): names of letters, digits, `.`, `_` and `-` joined by `/`, ending in `.js` or `.mjs`, with no `..`. |
 | `alt` | Required with `draw`: what the drawing shows, for screen readers. |
 | `kicker` | `title` layout only: a small line above the title. |
 | `legend` | `title` layout only: `true` adds a legend of the deck's status labels. |

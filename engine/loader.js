@@ -136,7 +136,7 @@ export function parseSlide(raw, file = '') {
   let draw = null;
   if (d.draw != null) {
     draw = String(d.draw);
-    if (!/\.m?js$/.test(draw) || /^[a-z]+:/i.test(draw) || draw.startsWith('/') || draw.split('/').includes('..')) {
+    if (!/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*\.m?js$/.test(draw) || draw.split('/').some(p => p === '.' || p === '..')) {
       throw new LoaderError(`draw "${draw}" must be a .js path inside the deck folder`, file, at('draw'));
     }
     if (d.alt == null || !String(d.alt).trim()) throw new LoaderError('a slide with draw needs alt text describing the drawing', file, at('draw'));

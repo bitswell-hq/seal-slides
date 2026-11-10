@@ -150,6 +150,37 @@ test('navigation: keys, hash, marks, notes, sources and theme', async () => {
   await context.close();
 });
 
+test('a drawing module is imported only from inside the deck folder', async () => {
+  const { page, context, errors } = await openDeck('#1');
+  const got = await page.evaluate(async () => {
+    const { loadDeckDrawing, drawUrl } = await import(new URL('../engine/runtime.js', location.href).href);
+    const refused = p => { try { return drawUrl(p); } catch (e) { return e.message; } };
+    return {
+      inside: typeof (await loadDeckDrawing('animations/dial.js')).draw,
+      real: (await loadDeckDrawing('../engine/draw.js')).error,
+      urls: ['%2e%2e/%2e%2e/other/x.js', '..\\engine\\draw.js', '/engine/draw.js', '\\\\evil.example\\x.js', 'https://evil.example/x.js'].map(refused),
+    };
+  });
+  assert.equal(got.inside, 'function');
+  assert.match(got.real, /outside the deck folder/);
+  for (const m of got.urls) assert.match(m, /outside the deck folder/);
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('the editor is created once when it is opened twice while it loads', async () => {
+  const { page, context, errors } = await openDeck('#1');
+  await page.evaluate(() => { const b = document.getElementById('edit-btn'); b.click(); b.click(); });
+  await page.locator('#editor').first().waitFor();
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator('#editor').count(), 1);
+  await page.keyboard.press('Escape');
+  await page.locator('#editor header button').click();
+  assert.ok(await page.locator('#editor').isHidden());
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
 test('portrait windows get the portrait drawing', async () => {
   const { page, context, errors } = await openDeck('#4', { viewport: { width: 420, height: 860 } });
   assert.equal(await page.locator('.slide.active .stage svg').getAttribute('viewBox'), '0 0 800 1240');

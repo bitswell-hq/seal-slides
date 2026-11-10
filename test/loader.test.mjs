@@ -99,6 +99,13 @@ test('draw must stay inside the deck folder and needs alt text', () => {
   assert.throws(() => parseSlide('---\ntitle: t\ndraw: ../x.js\nalt: a\n---\n', 'c.md'), /inside the deck folder/);
   assert.throws(() => parseSlide('---\ntitle: t\ndraw: https://e.org/x.js\nalt: a\n---\n', 'c.md'), /inside the deck folder/);
   assert.throws(() => parseSlide('---\ntitle: t\ndraw: /x.js\nalt: a\n---\n', 'c.md'), /inside the deck folder/);
+  const forms = ['%2e%2e/%2e%2e/other/x.js', '%2E%2E/x.js', 'a/%2e%2e/%2e%2e/x.js', '\\\\evil.example\\x.js', '..\\x.js', 'a\\..\\..\\x.js', './x.js', 'a/./x.js', 'a/../x.js', 'a//x.js', '//e.org/x.js', 'x.js?y.js', 'x.js#y.js', 'a b/x.js', 'data:text/javascript,x.js', 'a/', '.js/'];
+  for (const form of forms) {
+    assert.throws(() => parseSlide(`---\ntitle: t\ndraw: ${JSON.stringify(form)}\nalt: a\n---\n`, 'c.md'), /inside the deck folder/, form);
+  }
+  for (const ok of ['x.js', 'animations/x.mjs', 'a/b-c/d_e.v2.js', '..a/x.js']) {
+    assert.equal(parseSlide(`---\ntitle: t\ndraw: ${JSON.stringify(ok)}\nalt: a\n---\n`, 'c.md').draw, ok);
+  }
   assert.throws(() => parseSlide('---\ntitle: t\ndraw: x.css\nalt: a\n---\n', 'c.md'), /\.js path/);
   assert.throws(() => parseSlide('---\ntitle: t\ndraw: animations/x.js\n---\n', 'c.md'), /needs alt text/);
   const s = parseSlide('---\ntitle: t\ndraw: animations/x.js\nalt: A drawing\n---\n', 'c.md');

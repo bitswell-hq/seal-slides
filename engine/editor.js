@@ -6,7 +6,7 @@
 import { parseSlide, setField, locate, linesOfRange, formatDuration, speakingSeconds } from './loader.js';
 import { GitHubClient, DeckStore, GitHubError, ConflictError } from './github.js';
 import { loadToken, saveToken, clearToken, cleanToken, standsAlone } from './auth.js';
-import { h, icon, loadDrawModule } from './runtime.js';
+import { h, icon, loadDrawModule, loadDeckDrawing, drawUrl } from './runtime.js';
 
 const TABS = [
   ['source', 'Slide'],
@@ -245,7 +245,7 @@ export function createEditor(deck) {
     srcErr.textContent = '';
     const known = s.draw ? deck.modFor(s) : null;
     if (s.draw && !known) {
-      loadDrawModule(new URL(s.draw, location.href).href).then(mod => deck.replaceSlide(i, s, mod));
+      loadDeckDrawing(s.draw).then(mod => deck.replaceSlide(i, s, mod));
     } else deck.replaceSlide(i, s);
     if (i === deck.cur) {
       if (document.activeElement !== scriptTa) scriptTa.value = scriptText(f.text, s);
@@ -267,7 +267,7 @@ export function createEditor(deck) {
   // published module.
   async function openDrawing(s) {
     const path = drawPath(s);
-    const res = await fetch(new URL(s.draw, location.href).href, { cache: 'no-store' });
+    const res = await fetch(drawUrl(s.draw), { cache: 'no-store' });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     const text = await res.text();
     let f = files.get(path);
@@ -317,7 +317,7 @@ export function createEditor(deck) {
   // published module when the text is the built one, otherwise the text itself.
   async function redraw(f) {
     const edited = f.text !== f.built;
-    const url = edited ? URL.createObjectURL(new Blob([f.text], { type: 'text/javascript' })) : new URL(f.draw, location.href).href;
+    const url = edited ? URL.createObjectURL(new Blob([f.text], { type: 'text/javascript' })) : drawUrl(f.draw);
     const mod = await loadDrawModule(url);
     if (edited) URL.revokeObjectURL(url);
     if (mod.error) { drawErr.textContent = mod.error; return; }

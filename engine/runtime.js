@@ -137,7 +137,20 @@ export function drawSlide(sec, mod, tall, icons) {
   });
 }
 
-// Import an animated slide's module. `url` is resolved against the deck page.
+// The URL of a file of the deck, from its path in the deck folder. A path
+// that resolves outside the deck page's folder is refused.
+export function drawUrl(path) {
+  const url = new URL(path, location.href).href;
+  if (!url.startsWith(new URL('.', location.href).href)) throw new Error(`${path} is outside the deck folder`);
+  return url;
+}
+
+// Import a slide's drawing module from its path in the deck folder.
+export async function loadDeckDrawing(path) {
+  try { return await loadDrawModule(drawUrl(path)); } catch (e) { return { error: e.message }; }
+}
+
+// Import a drawing module from a URL.
 export async function loadDrawModule(url) {
   try {
     const m = await import(url);
@@ -192,7 +205,7 @@ export async function mountDeck({ data, model, slug }) {
   const mods = new Map();
   const modFor = s => (s.draw ? mods.get(s.draw) : null);
   await Promise.all([...new Set(model.slides.filter(s => s.draw).map(s => s.draw))].map(async p => {
-    const mod = await loadDrawModule(new URL(p, location.href).href);
+    const mod = await loadDeckDrawing(p);
     if (mod.icons) Object.assign(icons, mod.icons);
     mods.set(p, mod);
   }));
@@ -367,15 +380,15 @@ export async function mountDeck({ data, model, slug }) {
   }
 
   /* lazily loaded tools */
-  let editor = null, recorder = null;
+  let editor = null, recorder = null, editorLoad = null, recorderLoad = null;
   async function openEditor(opts = {}) {
     if (root.dataset.recording) return;
-    if (!editor) editor = (await import('./editor.js')).createEditor(api);
-    editor.open(opts);
+    editorLoad ||= import('./editor.js').then(m => (editor = m.createEditor(api)));
+    (await editorLoad).open(opts);
   }
-  async function recorderTool() {
-    if (!recorder) recorder = (await import('./recorder.js')).createRecorder(api);
-    return recorder;
+  function recorderTool() {
+    recorderLoad ||= import('./recorder.js').then(m => (recorder = m.createRecorder(api)));
+    return recorderLoad;
   }
   async function toggleRecord() {
     if (editor && editor.isOpen() && !root.dataset.recording) editor.close();
