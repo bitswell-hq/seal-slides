@@ -174,7 +174,9 @@ Save commits every changed file in one commit and opens a pull request:
 2. On a pull-request preview, saves commit to that pull request's branch, when you can push to it.
 3. Without push access, the branch is created in your fork (made on first use) and the pull request comes from it.
 
-Before committing to an existing branch, the editor checks that each file on the branch is still the text the edit started from; if someone changed it in between, nothing is committed and the editor asks you to reload.
+When you sign in while a pull request of yours from the editor is open, the editor loads that pull request's version of each file it changed and says so with a link, so a second edit builds on the first and not on the page as built. A file you had already changed keeps your text; discard your changes to load the pull request's version.
+
+Before committing to an existing branch, the editor checks that each file on the branch is still the text it loaded; if it changed in between, nothing is committed and the editor links the pull request that holds the newer version.
 
 ### Comments
 
@@ -222,7 +224,7 @@ npm run test:smoke                 # headless Chromium
 ```
 
 - `test/loader.test.mjs`: front matter, line maps, ordering, durations, errors with file and line, Markdown rendering with line anchors, front-matter edits that round-trip through YAML, finding a quote in a file.
-- `test/github.test.mjs`: the persistence layer against a mocked GitHub API: new branch and pull request, reusing the viewer's pull request, conflicts, previews committing to their pull request's branch, forks (and syncing a fork that lags), line and file review comments, re-finding a quote in a newer file, comment files, and reading comments without a token.
+- `test/github.test.mjs`: the persistence layer against a mocked GitHub API: new branch and pull request, reusing the viewer's pull request, loading its version of the files, conflicts, previews committing to their pull request's branch, forks (and syncing a fork that lags), line and file review comments, re-finding a quote in a newer file, comment files, and reading comments without a token.
 - `test/build.test.mjs`: the example deck builds; the page's CSP matches its import map; deck text cannot close the page's script element; a broken deck is reported with file and line and writes nothing.
 - `test/recorder.test.mjs`: the WebM duration fix and the choice of MP4 or WebM.
 - `test/smoke/smoke.test.mjs`: in headless Chromium with fake media devices and a fake GitHub API: navigation, hash, marks, script and sources panels, theme, portrait drawings; read-only comments; edit mode (live preview, a YAML error, script and sources edits, sign-in, save, a comment on a selected line); recording with pause (the file is 1920×1080 with an audio track, its frames match the painted slides and hold nothing of the presenter panel), a blocked microphone and a cancelled countdown; and each painted slide against a screenshot of the live slide.

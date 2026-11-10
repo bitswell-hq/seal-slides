@@ -16,11 +16,12 @@ export class GitHubError extends Error {
 }
 
 export class ConflictError extends Error {
-  constructor(path, branch) {
-    super(`${path} changed on ${branch} since this page was built; reload the page to edit the newer version`);
+  constructor(path, branch, pr) {
+    super(`${path} changed in pull request #${pr.number} since the editor loaded it; nothing was saved. See ${pr.url}`);
     this.name = 'ConflictError';
     this.path = path;
     this.branch = branch;
+    this.pr = pr;
   }
 }
 
@@ -159,28 +160,55 @@ export class DeckStore {
     throw new Error(`the fork ${fork.owner}/${fork.name} is not ready yet; try again in a minute`);
   }
 
-  // Where an edit goes: the branch, the repository holding it and its pull request.
-  async target() {
+  // The open pull request the viewer's edits go to, if there is one: the
+  // preview's own when they can push to it, otherwise the one this editor
+  // opened for them earlier. It never forks.
+  async lookup() {
     const c = this.client;
     const me = await this.viewer();
     const info = await c.get(this.base);
     const canPush = !!(info.permissions && info.permissions.push);
     const baseRef = this.repo.ref || info.default_branch;
+    const here = p => p.head.repo.full_name === this.full;
+    let pr = null;
     if (this.repo.pr) {
       const pull = await c.get(`${this.base}/pulls/${this.repo.pr}`);
-      if (pull.state === 'open' && canPush && pull.head.repo && pull.head.repo.full_name === this.full) {
-        return { owner: this.repo.owner, name: this.repo.name, branch: pull.head.ref, pr: pull, fork: false, create: false, baseRef };
-      }
+      if (pull.state === 'open' && canPush && pull.head.repo && here(pull)) pr = pull;
     }
-    const home = canPush ? { owner: this.repo.owner, name: this.repo.name, fresh: false } : await this.fork(me.login);
-    const prefix = `seal-slides/${this.slug}/`;
-    const pulls = await c.get(`${this.base}/pulls?state=open&per_page=100`);
-    const mine = pulls.find(p => p.user && p.user.login === me.login && p.head.ref.startsWith(prefix) &&
-      p.head.repo && p.head.repo.full_name === `${home.owner}/${home.name}` && p.base.ref === baseRef);
+    if (!pr) {
+      const prefix = `seal-slides/${this.slug}/`;
+      const pulls = await c.get(`${this.base}/pulls?state=open&per_page=100`);
+      pr = pulls.find(p => p.user && p.user.login === me.login && p.head.ref.startsWith(prefix) &&
+        p.head.repo && here(p) === canPush && p.base.ref === baseRef) || null;
+    }
+    const home = pr && !canPush ? { owner: pr.head.repo.owner.login, name: pr.head.repo.name } : { owner: this.repo.owner, name: this.repo.name };
+    return { me, info, canPush, baseRef, pr, home };
+  }
+
+  // Where an edit goes: the branch, the repository holding it and its pull request.
+  async target() {
+    const { me, info, canPush, baseRef, pr, home } = await this.lookup();
     const fork = !canPush;
-    if (mine) return { owner: home.owner, name: home.name, branch: mine.head.ref, pr: mine, fork, create: false, baseRef };
-    const branch = `${prefix}${me.login}-${stamp(this.now())}`;
-    return { owner: home.owner, name: home.name, branch, pr: null, fork, create: true, baseRef, from: this.repo.sha, defaultBranch: info.default_branch };
+    if (pr) return { owner: home.owner, name: home.name, branch: pr.head.ref, pr, fork, create: false, baseRef };
+    const at = canPush ? home : await this.fork(me.login);
+    const branch = `seal-slides/${this.slug}/${me.login}-${stamp(this.now())}`;
+    return { owner: at.owner, name: at.name, branch, pr: null, fork, create: true, baseRef, from: this.repo.sha, defaultBranch: info.default_branch };
+  }
+
+  // The deck's files as the viewer's open pull request holds them, by path,
+  // so that the next edit builds on the last one rather than on the page as
+  // built. Null when the viewer has no open pull request.
+  async pending() {
+    const { pr, home } = await this.lookup();
+    if (!pr) return null;
+    const changed = await this.client.get(`${this.base}/pulls/${pr.number}/files?per_page=100`);
+    const files = new Map();
+    for (const x of changed) {
+      if (x.status === 'removed' || !x.filename.startsWith(this.deckDir + '/') || x.filename.startsWith(this.deckDir + '/comments/')) continue;
+      const text = await this.readFile(home.owner, home.name, x.filename, pr.head.ref);
+      if (text != null) files.set(x.filename, text);
+    }
+    return { pr: { number: pr.number, url: pr.html_url }, branch: pr.head.ref, files };
   }
 
   async createBranch(t) {
@@ -224,8 +252,8 @@ export class DeckStore {
     return commit;
   }
 
-  // files: [{ path, content, base }] where base is the text the edit started
-  // from; a file that changed on the branch since then is a conflict.
+  // files: [{ path, content, base }] where base is the text the editor loaded
+  // (see pending); a file that changed on the branch since then is a conflict.
   async saveEdit({ files, message, body }) {
     if (!files.length) throw new Error('nothing to save');
     const t = await this.target();
@@ -235,7 +263,7 @@ export class DeckStore {
       for (const f of files) {
         if (f.base == null) continue;
         const now = await this.readFile(t.owner, t.name, f.path, t.branch);
-        if (now != null && now !== f.base && now !== f.content) throw new ConflictError(f.path, t.branch);
+        if (now != null && now !== f.base && now !== f.content) throw new ConflictError(f.path, t.branch, { number: t.pr.number, url: t.pr.html_url });
       }
     }
     const commit = await this.commitFiles(t, files, message);

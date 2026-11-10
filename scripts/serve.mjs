@@ -20,8 +20,10 @@ export function serve(dir, port = 0) {
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://localhost');
-      let p = path.join(root, decodeURIComponent(url.pathname));
-      if (!p.startsWith(root)) { res.writeHead(403).end(); return; }
+      let rel;
+      try { rel = decodeURIComponent(url.pathname); } catch (_) { res.writeHead(400).end(); return; }
+      let p = path.join(root, rel);
+      if (p !== root && !p.startsWith(root + path.sep)) { res.writeHead(403).end(); return; }
       let s = await stat(p).catch(() => null);
       if (s && s.isDirectory()) {
         if (!url.pathname.endsWith('/')) { res.writeHead(301, { Location: url.pathname + '/' + url.search }).end(); return; }

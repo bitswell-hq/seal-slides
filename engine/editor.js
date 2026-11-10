@@ -17,6 +17,7 @@ const TABS = [
 ];
 
 const fmtDate = s => { const d = new Date(s); return isNaN(d) ? '' : d.toISOString().slice(0, 10); };
+const link = (href, text) => h('a', { href, target: '_blank', rel: 'noopener', text });
 const lineLabel = (line, end) => (line == null ? 'whole file' : `line ${line}${end && end !== line ? '–' + end : ''}`);
 
 export function createEditor(deck) {
@@ -37,6 +38,12 @@ export function createEditor(deck) {
   let tab = 'source';
   let anchor = null;
   let isOpen = false;
+  // One request that writes to GitHub, or reads what the next one builds on, at a time.
+  let busy = false;
+  // The viewer's open pull request and the files it holds that are not loaded yet.
+  let mine = null;
+  // The file the slide textareas hold.
+  let filled = null;
   const slide = () => deck.model.slides[deck.cur];
   const slideFile = () => files.get(slide().file);
 
@@ -103,17 +110,20 @@ export function createEditor(deck) {
   const repoName = repo ? `${repo.owner}/${repo.name}` : null;
   const signIn = h('div', { class: 'signin' },
     h('p', { class: 'hint' }, 'Sign in to save. Paste a ', h('a', { href: 'https://github.com/settings/personal-access-tokens/new', target: '_blank', rel: 'noopener', text: 'fine-grained token' }),
-      ` with read and write access to Contents and Pull requests${repoName ? ' on ' + repoName : ''}. It stays in this tab only and is sent only to api.github.com.`),
+      ` with read and write access to Contents and Pull requests${repoName ? ' on ' + repoName : ''}. Without push access${repoName ? ' to ' + repoName : ''}, paste a `,
+      h('a', { href: 'https://github.com/settings/tokens/new', target: '_blank', rel: 'noopener', text: 'classic token' }),
+      ' with the public_repo scope instead; your edits go through your fork. The token stays in this tab only and is sent only to api.github.com.'),
     h('div', { class: 'row' }, tokenIn, signInBtn), signInMsg);
   const who = h('span', { class: 'hint' });
   const signOutBtn = h('button', { class: 'act', type: 'button', text: 'Sign out' });
   const whoRow = h('div', { class: 'row', hidden: true }, who, signOutBtn);
+  const pendingNote = h('p', { class: 'hint', 'aria-live': 'polite', hidden: true });
   const changedList = h('p', { class: 'changed' });
   const msgIn = h('input', { type: 'text', id: 'ed-message', 'aria-label': 'Commit message', placeholder: 'Commit message' });
   const saveBtn = h('button', { class: 'act primary', type: 'button', text: 'Save to GitHub' });
   const discardBtn = h('button', { class: 'act', type: 'button', text: 'Discard changes' });
   const saveResult = h('p', { class: 'result', 'aria-live': 'polite' });
-  const footer = h('footer', {}, signIn, whoRow, changedList, msgIn, h('div', { class: 'row' }, saveBtn, discardBtn), saveResult);
+  const footer = h('footer', {}, signIn, whoRow, pendingNote, changedList, msgIn, h('div', { class: 'row' }, saveBtn, discardBtn), saveResult);
   if (!repo) {
     signIn.hidden = true;
     saveResult.textContent = 'This build names no repository, so it cannot save. Build with --repo owner/name.';
@@ -148,9 +158,11 @@ export function createEditor(deck) {
     const ghUrl = repo ? `https://github.com/${repo.owner}/${repo.name}/blob/${repo.sha || repo.ref}/${s.file}` : null;
     fileLabel.textContent = '';
     fileLabel.append(ghUrl ? h('a', { href: ghUrl, target: '_blank', rel: 'noopener', text: s.file }) : s.file);
-    if (document.activeElement !== srcTa) srcTa.value = f.text;
-    if (document.activeElement !== scriptTa) scriptTa.value = scriptText(f.text, s);
-    if (document.activeElement !== sourcesTa) sourcesTa.value = s.sources.join('\n');
+    const typingIn = f === filled ? document.activeElement : null;
+    filled = f;
+    if (typingIn !== srcTa) srcTa.value = f.text;
+    if (typingIn !== scriptTa) scriptTa.value = scriptText(f.text, s);
+    if (typingIn !== sourcesTa) sourcesTa.value = s.sources.join('\n');
     syncScriptHint(s);
     tabBtns.drawing.hidden = !s.draw;
     if (tab === 'drawing' && !s.draw) show('source');
@@ -158,7 +170,7 @@ export function createEditor(deck) {
     tabBtns.comments.textContent = `Comments (${deck.commentsFor(deck.cur).length})`;
     if (tab === 'comments') renderComments();
     if (!anchor || !deck.slideFiles(deck.cur).includes(anchor.file)) setAnchor(null);
-    srcErr.textContent = '';
+    try { parseSlide(f.text, f.path); srcErr.textContent = ''; } catch (e) { srcErr.textContent = e.message; }
     syncFooter();
   }
 
@@ -179,8 +191,18 @@ export function createEditor(deck) {
   function syncFooter() {
     const list = changed();
     changedList.textContent = list.length ? 'Changed: ' + list.map(f => f.path).join(', ') : 'No changes yet.';
-    saveBtn.disabled = !list.length || !repo;
+    saveBtn.disabled = busy || !list.length || !repo;
     discardBtn.disabled = !list.length;
+    const waiting = mine ? list.filter(f => mine.files.has(f.path)) : [];
+    pendingNote.textContent = '';
+    pendingNote.hidden = !mine || !(mine.loaded.length || waiting.length);
+    if (!pendingNote.hidden) {
+      const names = l => l.map(x => x.split('/').pop()).join(', ');
+      const pr = link(mine.pr.url, `pull request #${mine.pr.number}`);
+      if (mine.loaded.length) pendingNote.append(`Editing ${names(mine.loaded)} as saved in your open `, pr, '.');
+      else pendingNote.append('Your open ', pr, ' is where saves go.');
+      if (waiting.length) pendingNote.append(` It holds a newer ${names(waiting.map(f => f.path))}; discard your changes to load it.`);
+    }
     signIn.hidden = !repo || !!login;
     whoRow.hidden = !login;
     who.textContent = login ? `Signed in as ${login}` : '';
@@ -232,6 +254,7 @@ export function createEditor(deck) {
     const s = slide();
     const path = drawPath(s);
     if (!path) return;
+    const moved = drawTa.dataset.path !== path;
     drawTa.dataset.path = path;
     let f = files.get(path);
     if (!f) {
@@ -240,14 +263,19 @@ export function createEditor(deck) {
         const res = await fetch(new URL(s.draw, location.href).href, { cache: 'no-store' });
         if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
         const text = await res.text();
-        f = files.get(path) || { path, base: text, text, kind: 'draw', draw: s.draw };
-        files.set(path, f);
+        f = files.get(path);
+        if (!f) {
+          f = { path, base: text, text, kind: 'draw', draw: s.draw };
+          files.set(path, f);
+          adopt(f);
+          syncFooter();
+        }
       } catch (e) {
         drawErr.textContent = `Could not load ${s.draw}: ${e.message}`;
         return;
       }
     }
-    if (drawTa.dataset.path === path && document.activeElement !== drawTa) drawTa.value = f.text;
+    if (drawTa.dataset.path === path && (moved || document.activeElement !== drawTa)) drawTa.value = f.text;
   }
   drawTa.addEventListener('input', () => {
     const f = files.get(drawTa.dataset.path);
@@ -274,6 +302,51 @@ export function createEditor(deck) {
     const me = await new GitHubClient({ token: t }).get('/user');
     return me.login;
   }
+
+  // Take the pull request's version of a file as what the editor edits.
+  // A file with unsaved changes keeps them; discarding them loads it.
+  function adopt(f) {
+    const text = mine ? mine.files.get(f.path) : undefined;
+    if (text === undefined || (text !== f.base && f.text !== f.base)) return;
+    mine.files.delete(f.path);
+    if (text === f.base) return;
+    f.base = f.text = text;
+    mine.loaded.push(f.path);
+  }
+  function refill() {
+    filled = null;
+    fillFromSlide();
+    const d = files.get(drawTa.dataset.path);
+    if (d) drawTa.value = d.text;
+  }
+  async function loadPending() {
+    if (busy) return;
+    busy = true;
+    syncFooter();
+    syncComposer();
+    const t = token;
+    try {
+      const p = await store().pending();
+      if (token !== t) return;
+      mine = p && { ...p, loaded: [] };
+      if (!mine) return;
+      let took = false;
+      for (const f of files.values()) {
+        const was = f.text;
+        adopt(f);
+        if (f.text === was) continue;
+        took = true;
+        if (f.kind === 'slide') preview(f.index, f);
+      }
+      if (took && isOpen) refill();
+    } catch (e) {
+      saveResult.textContent = `Could not check for your open pull request: ${e.message}`;
+    } finally {
+      busy = false;
+      syncFooter();
+      syncComposer();
+    }
+  }
   signInBtn.addEventListener('click', async () => {
     const t = cleanToken(tokenIn.value);
     if (!t) { signInMsg.textContent = 'That does not look like a GitHub token (github_pat_…, ghp_…).'; return; }
@@ -291,14 +364,15 @@ export function createEditor(deck) {
       signInBtn.disabled = false;
       syncFooter();
     }
+    if (token === t) loadPending();
   });
   tokenIn.addEventListener('keydown', e => { if (e.key === 'Enter') signInBtn.click(); });
-  signOutBtn.addEventListener('click', () => { clearToken(); token = null; login = null; syncFooter(); });
-  if (token && repo) verify(token).then(l => { login = l; syncFooter(); }).catch(() => { clearToken(); token = null; syncFooter(); });
+  signOutBtn.addEventListener('click', () => { clearToken(); token = null; login = null; mine = null; syncFooter(); });
+  if (token && repo) verify(token).then(l => { login = l; syncFooter(); loadPending(); }, () => { clearToken(); token = null; syncFooter(); });
 
   /* ---------- saving ---------- */
-  const link = (href, text) => h('a', { href, target: '_blank', rel: 'noopener', text });
   async function save() {
+    if (busy) return;
     const list = changed();
     if (!list.length || !repo) return;
     if (!login) { saveResult.textContent = 'Sign in first.'; tokenIn.focus(); return; }
@@ -306,36 +380,48 @@ export function createEditor(deck) {
       if (f.kind !== 'slide') continue;
       try { parseSlide(f.text, f.path); } catch (e) { saveResult.textContent = `Not saved: ${e.message}`; return; }
     }
-    saveBtn.disabled = true;
+    busy = true;
+    syncFooter();
+    syncComposer();
     saveResult.textContent = 'Saving…';
+    let conflict = false;
     try {
       const message = msgIn.value.trim() || msgIn.placeholder;
-      const r = await store().saveEdit({ files: list.map(f => ({ path: f.path, content: f.text, base: f.base })), message });
-      list.forEach(f => { f.base = f.text; });
+      const sent = list.map(f => ({ path: f.path, content: f.text, base: f.base }));
+      const r = await store().saveEdit({ files: sent, message });
+      for (const x of sent) {
+        files.get(x.path).base = x.content;
+        if (mine) mine.files.delete(x.path);
+      }
       msgIn.value = '';
       saveResult.textContent = '';
       saveResult.append(`Committed to ${r.branch}: `, link(r.commit.url, r.commit.sha.slice(0, 7)), r.createdPr ? ', opened ' : ', added to ', link(r.pr.url, `pull request #${r.pr.number}`), '.');
     } catch (e) {
-      saveResult.textContent = e instanceof ConflictError ? e.message : `Not saved: ${e.message}`;
+      conflict = e instanceof ConflictError;
+      saveResult.textContent = '';
+      if (conflict) saveResult.append(`Not saved: ${e.path.split('/').pop()} changed in `, link(e.pr.url, `pull request #${e.pr.number}`), ' since the editor loaded it.');
+      else saveResult.append(`Not saved: ${e.message}`);
     } finally {
+      busy = false;
       syncFooter();
+      syncComposer();
     }
+    if (conflict) await loadPending();
   }
   saveBtn.addEventListener('click', save);
   discardBtn.addEventListener('click', async () => {
     for (const f of changed()) {
       f.text = f.base;
-      if (f.kind === 'slide') deck.replaceSlide(f.index, parseSlide(f.base, f.path));
+      adopt(f);
+      if (f.kind === 'slide') preview(f.index, f);
       else if (f.kind === 'draw') {
         // The module as published: edits were imported from blob URLs, so this is the original.
         const mod = await loadDrawModule(new URL(f.draw, location.href).href);
         deck.model.slides.forEach((s, i) => { if (s.draw === f.draw) deck.replaceSlide(i, s, mod); });
       }
     }
-    fillFromSlide();
-    if (drawTa.dataset.path && files.get(drawTa.dataset.path)) drawTa.value = files.get(drawTa.dataset.path).text;
+    refill();
     drawErr.textContent = '';
-    syncFooter();
   });
   panel.addEventListener('keydown', e => {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); }
@@ -367,15 +453,18 @@ export function createEditor(deck) {
     anchorLabel.append(`On ${a.file}, ${lineLabel(a.line, a.endLine)}`);
     if (a.quote) anchorLabel.append(h('br'), `“${a.quote.length > 160 ? a.quote.slice(0, 160) + '…' : a.quote}”`);
     wholeBtn.hidden = !anchor;
-    postBtn.disabled = !repo;
+    postBtn.disabled = busy || !repo;
   }
   wholeBtn.addEventListener('click', () => setAnchor(null));
   postBtn.addEventListener('click', async () => {
+    if (busy) return;
     if (!login) { commentResult.textContent = 'Sign in first.'; tokenIn.focus(); return; }
     const body = commentTa.value.trim();
     if (!body) { commentResult.textContent = 'Write a comment first.'; commentTa.focus(); return; }
     const a = anchor || { file: slide().file, line: null, endLine: null, quote: '' };
-    postBtn.disabled = true;
+    busy = true;
+    syncFooter();
+    syncComposer();
     commentResult.textContent = 'Posting…';
     try {
       const r = await store().saveComment({ anchor: a, body });
@@ -389,7 +478,9 @@ export function createEditor(deck) {
     } catch (e) {
       commentResult.textContent = `Not posted: ${e.message}`;
     } finally {
-      postBtn.disabled = !repo;
+      busy = false;
+      syncFooter();
+      syncComposer();
     }
   });
 

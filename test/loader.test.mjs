@@ -201,6 +201,16 @@ test('setField emits YAML that parses back to the same values', () => {
   assert.deepEqual(parseSlide(setField(SLIDE, 'notes', notes), 's.md').notes, notes.map(n => n.trim()));
 });
 
+test('a script line starting with # is replaced with the rest of the notes block', () => {
+  const once = setField(SLIDE, 'notes', ['First line.', '#1 reason to care']);
+  const f = fieldLines(once).notes;
+  assert.equal(once.split('\n')[f.end - 1], '  #1 reason to care', 'the block ends on its last line');
+  const twice = setField(once, 'notes', ['First line.', '#1 reason to care!']);
+  assert.deepEqual(parseSlide(twice, 's.md').notes, ['First line.', '#1 reason to care!']);
+  assert.deepEqual(parseSlide(setField(twice, 'notes', []), 's.md').notes, []);
+  assert.deepEqual(parseSlide(twice, 's.md').sources, parseSlide(SLIDE, 's.md').sources);
+});
+
 test('setField adds a missing key before the closing fence and removes empty ones', () => {
   const added = setField('---\ntitle: t\n---\nbody\n', 'duration', 20);
   assert.equal(added, '---\ntitle: t\nduration: 20\n---\nbody\n');
@@ -208,6 +218,10 @@ test('setField adds a missing key before the closing fence and removes empty one
   assert.ok(!removed.includes('sources:'));
   assert.deepEqual(parseSlide(removed, 's.md').notes, ['First line read aloud.', 'Second line, after a pause.']);
   assert.equal(setField('# no front matter\n', 'title', 'T'), '---\ntitle: T\n---\n# no front matter\n');
+});
+
+test('repo_dir is not a deck key', () => {
+  assert.throws(() => parseDeck('---\ntitle: t\nrepo_dir: decks/x\n---\n', 'deck.md'), /unknown deck key "repo_dir"/);
 });
 
 test('fieldLines ignores indented keys and comments', () => {

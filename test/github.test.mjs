@@ -140,6 +140,91 @@ test('saveEdit refuses to overwrite a file that changed on the branch', async ()
   assert.ok(!gh.paths().some(p => p.includes('/git/')), 'nothing was committed');
 });
 
+test('a conflict names the pull request that holds the newer version', async () => {
+  const pull = { number: 3, html_url: 'https://github.com/acme/decks/pull/3', user: { login: 'octo' }, head: { ref: 'seal-slides/example/octo-1', repo: { full_name: 'acme/decks' } }, base: { ref: 'main' } };
+  const gh = fakeGitHub([
+    ['GET', /^\/user$/, () => ({ login: 'octo' })],
+    ['GET', /^\/repos\/acme\/decks$/, () => ({ default_branch: 'main', permissions: { push: true } })],
+    ['GET', /^\/repos\/acme\/decks\/pulls\?state=open/, () => [pull]],
+    ['GET', /\/contents\//, () => ({ content: b64('changed since') })],
+  ]);
+  await assert.rejects(store(gh).saveEdit({ files: [{ path: 'decks/example/slides/02.md', content: 'mine', base: 'old' }], message: 'Edit' }), e =>
+    e instanceof ConflictError && e.path === 'decks/example/slides/02.md' && e.pr.number === 3 && e.pr.url === pull.html_url &&
+    e.message.includes('pull request #3') && e.message.includes(pull.html_url) && !/reload/.test(e.message));
+});
+
+test('a second edit builds on the viewer\'s open pull request, not on the page as built', async () => {
+  const branch = 'seal-slides/example/octo-20261101-090000Z';
+  const path = 'decks/example/slides/01-title.md';
+  const pull = { number: 3, html_url: 'https://github.com/acme/decks/pull/3', user: { login: 'octo' }, head: { ref: branch, repo: { full_name: 'acme/decks' } }, base: { ref: 'main' } };
+  const onBranch = { [path]: 'T1', 'decks/example/animations/dial.js': 'draw 1' };
+  let tree;
+  const gh = fakeGitHub([
+    ['GET', /^\/user$/, () => ({ login: 'octo' })],
+    ['GET', /^\/repos\/acme\/decks$/, () => ({ default_branch: 'main', permissions: { push: true } })],
+    ['GET', /^\/repos\/acme\/decks\/pulls\?state=open/, () => [pull]],
+    ['GET', /^\/repos\/acme\/decks\/pulls\/3\/files/, () => [
+      { filename: path, status: 'modified' },
+      { filename: 'decks/example/animations/dial.js', status: 'modified' },
+      { filename: 'decks/example/slides/09-gone.md', status: 'removed' },
+      { filename: 'decks/example/comments/20261101-090000Z-octo.md', status: 'added' },
+      { filename: 'decks/other/slides/01.md', status: 'modified' },
+      { filename: 'README.md', status: 'modified' },
+    ]],
+    ['GET', /^\/repos\/acme\/decks\/contents\/(.+)\?ref=(.+)$/, m => {
+      assert.equal(decodeURIComponent(m[2]), branch);
+      return m[1] in onBranch ? { content: b64(onBranch[m[1]]) } : R(404, { message: 'Not Found' });
+    }],
+    ['POST', /^\/repos\/acme\/decks\/git\/trees$/, (_, body) => { tree = body; return R(201, { sha: 'new-tree' }); }],
+    ...commitRoutes('acme', 'decks', branch, 'branch-head'),
+  ]);
+  const s = store(gh);
+  const p = await s.pending();
+  assert.deepEqual(p.pr, { number: 3, url: 'https://github.com/acme/decks/pull/3' });
+  assert.equal(p.branch, branch);
+  assert.deepEqual([...p.files], [[path, 'T1'], ['decks/example/animations/dial.js', 'draw 1']]);
+  assert.ok(!gh.paths().some(x => !x.startsWith('GET ')), 'looking writes nothing');
+
+  // The page was built with T0. Saving from T0 is refused; saving from what pending() loaded goes through.
+  await assert.rejects(s.saveEdit({ files: [{ path, content: 'T0 edited', base: 'T0' }], message: 'Edit' }), ConflictError);
+  const r = await s.saveEdit({ files: [{ path, content: 'T2', base: p.files.get(path) }], message: 'Edit again' });
+  assert.equal(r.pr.number, 3);
+  assert.equal(r.createdPr, false);
+  assert.deepEqual(tree.tree, [{ path, mode: '100644', type: 'blob', content: 'T2' }]);
+});
+
+test('pending is null without an open pull request of the viewer\'s, and does not fork', async () => {
+  const others = { number: 4, html_url: 'u', user: { login: 'someone' }, head: { ref: 'seal-slides/example/someone-1', repo: { full_name: 'acme/decks' } }, base: { ref: 'main' } };
+  const gh = fakeGitHub([
+    ['GET', /^\/user$/, () => ({ login: 'octo' })],
+    ['GET', /^\/repos\/acme\/decks$/, () => ({ default_branch: 'main', permissions: { push: false } })],
+    ['GET', /^\/repos\/acme\/decks\/pulls\?state=open/, () => [others]],
+  ]);
+  assert.equal(await store(gh).pending(), null);
+  assert.deepEqual(gh.paths(), ['GET /user', 'GET /repos/acme/decks', 'GET /repos/acme/decks/pulls?state=open&per_page=100']);
+});
+
+test('without push access, pending and saveEdit use the pull request\'s fork branch', async () => {
+  const branch = 'seal-slides/example/octo-1';
+  const path = 'decks/example/slides/02.md';
+  const pull = { number: 9, html_url: 'https://github.com/acme/decks/pull/9', user: { login: 'octo' }, head: { ref: branch, repo: { full_name: 'octo/decks', name: 'decks', owner: { login: 'octo' } } }, base: { ref: 'main' } };
+  const gh = fakeGitHub([
+    ['GET', /^\/user$/, () => ({ login: 'octo' })],
+    ['GET', /^\/repos\/acme\/decks$/, () => ({ default_branch: 'main', permissions: { push: false } })],
+    ['GET', /^\/repos\/acme\/decks\/pulls\?state=open/, () => [pull]],
+    ['GET', /^\/repos\/acme\/decks\/pulls\/9\/files/, () => [{ filename: path, status: 'modified' }]],
+    ['GET', /^\/repos\/octo\/decks\/contents\//, () => ({ content: b64('T1') })],
+    ...commitRoutes('octo', 'decks', branch, 'fork-head'),
+  ]);
+  const s = store(gh);
+  const p = await s.pending();
+  assert.equal(p.files.get(path), 'T1');
+  const r = await s.saveEdit({ files: [{ path, content: 'T2', base: 'T1' }], message: 'Edit' });
+  assert.equal(r.repo, 'octo/decks');
+  assert.equal(r.pr.number, 9);
+  assert.ok(!gh.paths().some(x => x.includes('/forks')), 'the fork already holds the branch');
+});
+
 test('on a pull-request preview, saveEdit commits to that pull request\'s branch', async () => {
   const pull = { number: 12, state: 'open', html_url: 'https://github.com/acme/decks/pull/12', head: { ref: 'feature/deck', sha: 'built-sha', repo: { full_name: 'acme/decks' } } };
   const gh = fakeGitHub([

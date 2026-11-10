@@ -19,7 +19,7 @@ export class LoaderError extends Error {
 export const STATUSES = ['plain', 'now', 'next', 'cited', 'title'];
 export const LAYOUTS = ['default', 'title', 'center'];
 const SLIDE_KEYS = new Set(['title', 'status', 'layout', 'draw', 'alt', 'duration', 'notes', 'sources', 'kicker', 'legend']);
-const DECK_KEYS = new Set(['title', 'description', 'duration', 'statuses', 'seals', 'theme', 'lang', 'repo_dir']);
+const DECK_KEYS = new Set(['title', 'description', 'duration', 'statuses', 'seals', 'theme', 'lang']);
 const COMMENT_KEYS = new Set(['author', 'created', 'file', 'line', 'end_line', 'quote']);
 const DEFAULT_SEAL = 'b82ad3de131c7be6ada4e5a622a4e77e1d2d1dbe43b0fcc26f85d11006fa6544';
 
@@ -67,10 +67,12 @@ export function fieldLines(text) {
       continue;
     }
     if (!cur) continue;
-    if (ln.trim() === '' || /^[ \t]*#/.test(ln)) {
-      if (/^[|>]/.test(cur.value)) cur.content.push(i + 1);
+    const block = /^[|>]/.test(cur.value);
+    if (ln.trim() === '') {
+      if (block) cur.content.push(i + 1);
       continue;
     }
+    if (/^[ \t]*#/.test(ln) && !(block && /^[ \t]/.test(ln))) continue;
     cur.end = i + 1;
     if (/^[ \t]*- /.test(ln) || /^[ \t]*-$/.test(ln)) cur.items.push(i + 1);
     cur.content.push(i + 1);

@@ -56,6 +56,8 @@ function fakeGitHub(page, state) {
     if (m === 'GET' && p.startsWith('/repos/acme/decks/pulls/comments')) return json(route, 200, state.reviewComments);
     if (m === 'GET' && p.startsWith('/repos/acme/decks/pulls?state=open')) return json(route, 200, state.pulls);
     if (m === 'GET' && /^\/repos\/acme\/decks\/pulls\/7\/files/.test(p)) return json(route, 200, state.prFiles);
+    const held = m === 'GET' && /^\/repos\/acme\/decks\/contents\/([^?]+)\?ref=/.exec(p);
+    if (held && state.contents[decodeURIComponent(held[1])] != null) return json(route, 200, { content: Buffer.from(state.contents[decodeURIComponent(held[1])], 'utf8').toString('base64') });
     if (m === 'POST' && p === '/repos/acme/decks/git/refs') { state.branch = body.ref.replace('refs/heads/', ''); return json(route, 201, {}); }
     if (m === 'GET' && p.startsWith('/repos/acme/decks/git/ref/heads/')) return json(route, 200, { object: { sha: 'built-sha' } });
     if (m === 'GET' && p === '/repos/acme/decks/git/commits/built-sha') return json(route, 200, { tree: { sha: 'tree-1' } });
@@ -80,7 +82,7 @@ async function openDeck(hash = '#1', opts = {}) {
   const errors = [];
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', e => errors.push(String(e)));
-  const state = { calls: [], pulls: [], prFiles: [], reviewComments: opts.reviewComments || [] };
+  const state = { calls: [], pulls: [], prFiles: [], contents: {}, reviewComments: opts.reviewComments || [] };
   await fakeGitHub(page, state);
   await page.goto(`${base}/example/${opts.query || ''}${hash}`);
   await page.waitForFunction(() => window.sealSlides && document.querySelector('#count').textContent.includes('/'));
@@ -232,6 +234,57 @@ test('edit mode: live preview, script edits, saving and a line comment', async (
 
   await page.locator('#editor header button').click();
   assert.ok(await page.locator('#editor').isHidden());
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('edit mode: a slide change while typing gives the editor the new slide\'s text', async () => {
+  const { page, context, errors } = await openDeck('#3');
+  await page.keyboard.press('e');
+  await page.locator('#editor').waitFor();
+  const src = page.locator('#ed-source');
+  await src.fill((await src.inputValue()).replace('title: A slide is a Markdown file', 'title: Slide three, edited'));
+  await page.evaluate(() => { location.hash = '#4'; });
+  await page.waitForFunction(() => document.querySelector('#count').textContent === '4 / 7');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'ed-source', 'the textarea kept the focus');
+  const four = await src.inputValue();
+  assert.match(four, /^---\ntitle: Some slides are drawn/);
+  await page.keyboard.type('x');
+  const changed = await page.evaluate(() => window.sealSlides.editor.changed().map(f => [f.path, f.text]));
+  assert.equal(changed.length, 2);
+  assert.equal(changed[0][0], 'decks/example/slides/03-markdown.md');
+  assert.match(changed[0][1], /title: Slide three, edited/);
+  assert.equal(changed[1][0], 'decks/example/slides/04-drawn.md');
+  assert.match(changed[1][1], /^---\ntitle: Some slides are drawn/);
+  assert.equal(changed[1][1].length, four.length + 1);
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('edit mode: signing in loads the viewer\'s open pull request, and the next save builds on it', async () => {
+  const { page, context, errors, state } = await openDeck('#3');
+  await page.keyboard.press('e');
+  await page.locator('#editor').waitFor();
+  const src = page.locator('#ed-source');
+  const file = 'decks/example/slides/03-markdown.md';
+  const first = (await src.inputValue()).replace('title: A slide is a Markdown file', 'title: Saved earlier');
+  state.pulls = [{ number: 7, html_url: 'https://github.com/acme/decks/pull/7', user: { login: 'octo' }, head: { ref: 'seal-slides/example/octo-1', sha: 'pr-head', repo: { full_name: 'acme/decks', name: 'decks', owner: { login: 'acme' } } }, base: { ref: 'main' } }];
+  state.prFiles = [{ filename: file, status: 'modified' }];
+  state.contents[file] = first;
+
+  await page.locator('#ed-token').fill('github_pat_' + 'x'.repeat(30));
+  await page.locator('#editor .signin button').click();
+  await page.locator('#editor footer .hint a', { hasText: 'pull request #7' }).waitFor();
+  assert.equal(await src.inputValue(), first);
+  await page.waitForFunction(() => document.querySelector('.slide.active h2').textContent === 'Saved earlier');
+  assert.match(await page.locator('#editor .changed').textContent(), /No changes/);
+
+  await src.fill(first.replace('title: Saved earlier', 'title: Saved twice'));
+  await page.locator('#editor footer button', { hasText: 'Save to GitHub' }).click();
+  await page.locator('#editor footer .result a', { hasText: 'pull request #7' }).waitFor();
+  assert.match(await page.locator('#editor footer .result').textContent(), /added to pull request #7/);
+  assert.match(state.tree.tree[0].content, /title: Saved twice/);
+  assert.ok(!state.calls.some(c => c.m === 'POST' && c.p === '/repos/acme/decks/pulls'), 'no second pull request');
   assert.deepEqual(errors, []);
   await context.close();
 });
