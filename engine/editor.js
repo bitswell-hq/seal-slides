@@ -203,7 +203,7 @@ export function createEditor(deck) {
       const pr = link(mine.pr.url, `pull request #${mine.pr.number}`);
       if (mine.loaded.length) pendingNote.append(`Editing ${names(mine.loaded)} as saved in your open `, pr, '.');
       else pendingNote.append('Your open ', pr, ' is where saves go.');
-      if (waiting.length) pendingNote.append(` It holds a newer ${names(waiting.map(f => f.path))}; discard your changes to load it.`);
+      if (waiting.length) pendingNote.append(` It holds a newer ${names(waiting.map(f => f.path))}; copy your text and load it from the message below.`);
     }
     const locked = !!repo && (!login || loading);
     for (const t of [srcTa, scriptTa, sourcesTa, drawTa]) t.readOnly = locked;
@@ -410,30 +410,41 @@ export function createEditor(deck) {
     } catch (e) {
       conflict = e instanceof ConflictError;
       saveResult.textContent = '';
-      if (conflict) {
-        const yours = files.get(e.path).text;
-        const copyBtn = h('button', { class: 'act', type: 'button', text: 'Copy my text' });
-        copyBtn.addEventListener('click', async () => {
-          try { await navigator.clipboard.writeText(yours); copyBtn.textContent = 'Copied'; } catch (_) { copyBtn.textContent = 'Could not copy; select it in the editor'; }
-        });
-        saveResult.append(`Not saved: ${e.path.split('/').pop()} changed in `, link(e.pr.url, `pull request #${e.pr.number}`),
-          ' since the editor loaded it. Copy your text, then discard your changes to load the newer version. ', copyBtn);
-      } else saveResult.append(`Not saved: ${e.message}`);
+      if (conflict) conflict = e;
+      else saveResult.append(`Not saved: ${e.message}`);
     } finally {
       busy = false;
       syncFooter();
       syncComposer();
     }
-    if (conflict) await loadPending();
+    if (!conflict) return;
+    await loadPending();
+    const f = files.get(conflict.path);
+    const copyBtn = h('button', { class: 'act', type: 'button', text: 'Copy my text' });
+    copyBtn.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(f.text); copyBtn.textContent = 'Copied'; } catch (_) { copyBtn.textContent = 'Could not copy; select it in the editor'; }
+    });
+    const loadBtn = h('button', { class: 'act', type: 'button', text: 'Load the newer version' });
+    loadBtn.addEventListener('click', async () => {
+      await reset(f);
+      refill();
+      saveResult.textContent = '';
+    });
+    saveResult.textContent = '';
+    saveResult.append(`Not saved: ${f.path.split('/').pop()} changed in `, link(conflict.pr.url, `pull request #${conflict.pr.number}`),
+      ' since the editor loaded it. Copy your text, then load the newer version of this file; your other changes stay. ', copyBtn);
+    if (mine && mine.files.has(f.path)) saveResult.append(' ', loadBtn);
   }
   saveBtn.addEventListener('click', save);
+  // Back to what the editor loaded for a file, or to the pull request's newer version of it.
+  async function reset(f) {
+    f.text = f.base;
+    adopt(f);
+    if (f.kind === 'slide') preview(f.index, f);
+    else await redraw(f);
+  }
   discardBtn.addEventListener('click', async () => {
-    for (const f of changed()) {
-      f.text = f.base;
-      adopt(f);
-      if (f.kind === 'slide') preview(f.index, f);
-      else await redraw(f);
-    }
+    for (const f of changed()) await reset(f);
     refill();
   });
   panel.addEventListener('keydown', e => {

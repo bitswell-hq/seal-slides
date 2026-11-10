@@ -295,14 +295,24 @@ test('edit mode: signing in loads the viewer\'s open pull request, and the next 
   assert.match(state.tree.tree[0].content, /title: Saved twice/);
   assert.ok(!state.calls.some(c => c.m === 'POST' && c.p === '/repos/acme/decks/pulls'), 'no second pull request');
 
-  // The pull request changes under the viewer: nothing is saved, their text can be copied, and discarding loads the newer version.
+  // The pull request changes one file under the viewer: nothing is saved, their text can be copied,
+  // and loading the newer version of that file keeps their edit to another.
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   const theirs = first.replace('title: Saved earlier', 'title: Changed elsewhere');
-  const yours = first.replace('title: Saved earlier', 'title: Typed meanwhile');
+  const yours = first.replace('title: Saved earlier', 'title: Typed meanwhile') + '\nTyped after the conflict.';
   state.contents[file] = theirs;
   state.tree = null;
-  await src.fill(yours);
+  await page.evaluate(() => { location.hash = '#5'; });
+  await page.waitForFunction(() => document.querySelector('#count').textContent === '5 / 7');
+  const other = (await src.inputValue()) + '\nAn edit to another slide.\n';
+  await src.fill(other);
+  await page.evaluate(() => { location.hash = '#3'; });
+  await page.waitForFunction(() => document.querySelector('#count').textContent === '3 / 7');
+  await src.fill(yours.slice(0, -1));
   await page.locator('#editor footer button', { hasText: 'Save to GitHub' }).click();
+  await page.locator('#editor footer .result button', { hasText: 'Copy my text' }).waitFor();
+  await src.focus();
+  await page.keyboard.type(yours.slice(-1));
   await page.locator('#editor footer .result button', { hasText: 'Copy my text' }).click();
   await page.locator('#editor footer .result button', { hasText: 'Copied' }).waitFor();
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), yours);
@@ -310,9 +320,13 @@ test('edit mode: signing in loads the viewer\'s open pull request, and the next 
   assert.equal(state.tree, null, 'nothing was committed');
   assert.equal(await src.inputValue(), yours);
   await page.locator('#editor footer').getByText('holds a newer 03-markdown.md').waitFor();
-  await page.locator('#editor footer button', { hasText: 'Discard changes' }).click();
+  await page.locator('#editor footer .result button', { hasText: 'Load the newer version' }).click();
   await page.waitForFunction(() => document.querySelector('.slide.active h2').textContent === 'Changed elsewhere');
   assert.equal(await src.inputValue(), theirs);
+  assert.deepEqual(await page.evaluate(() => window.sealSlides.editor.changed().map(f => [f.path, f.text])), [['decks/example/slides/05-edit.md', other]]);
+  await page.locator('#editor footer button', { hasText: 'Save to GitHub' }).click();
+  await page.locator('#editor footer .result a', { hasText: 'pull request #7' }).waitFor();
+  assert.deepEqual(state.tree.tree.map(x => [x.path, x.content]), [['decks/example/slides/05-edit.md', other]]);
   assert.deepEqual(errors, []);
   await context.close();
 });
