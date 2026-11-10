@@ -425,7 +425,7 @@ export function createEditor(deck) {
     copyBtn.addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(f.text); copyBtn.textContent = 'Copied'; } catch (_) { copyBtn.textContent = 'Could not copy; select it in the editor'; }
     });
-    const loadBtn = h('button', { class: 'act', type: 'button', text: 'Load the newer version' });
+    const loadBtn = h('button', { class: 'act', type: 'button', text: f.kind === 'draw' ? 'Drop my change to this file' : 'Load the newer version' });
     loadBtn.addEventListener('click', async () => {
       await reset(f);
       refill();
@@ -433,9 +433,9 @@ export function createEditor(deck) {
     });
     saveResult.textContent = '';
     saveResult.append(`Not saved: ${f.path.split('/').pop()} ${f.kind === 'draw' ? 'differs' : 'changed'} in `, link(conflict.pr.url, `pull request #${conflict.pr.number}`),
-      f.kind === 'draw' ? ' from the published module this edit started from. A drawing module is never loaded from a pull request, so copy your text and make this edit once that pull request is merged; your other changes stay. '
+      f.kind === 'draw' ? ' from the published module this edit started from. A drawing module is never loaded from a pull request, so copy your text, drop this change to save your others, and make this edit once that pull request is merged. '
         : ' since the editor loaded it. Copy your text, then load the newer version of this file; your other changes stay. ', copyBtn);
-    if (mine && mine.files.has(f.path)) saveResult.append(' ', loadBtn);
+    if (f.kind === 'draw' || (mine && mine.files.has(f.path))) saveResult.append(' ', loadBtn);
   }
   saveBtn.addEventListener('click', save);
   // Back to what the editor loaded for a file, or to the pull request's newer version of it.

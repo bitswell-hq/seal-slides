@@ -62,9 +62,43 @@ function proofMarks() {
   return pm;
 }
 
+// Deck HTML (a slide body, a script line, a source) as DOM. The text may come
+// from a pull request's branch, so nothing in it may run script in this page
+// or get a handle on its window: it is parsed in an inert template, cleaned,
+// and the cleaned nodes themselves are returned.
+const DROPPED = new Set(['script', 'object', 'embed', 'applet', 'frame', 'frameset', 'portal', 'fencedframe', 'base', 'meta', 'link', 'form', 'template']);
+const URL_ATTRS = new Set(['href', 'src', 'action', 'formaction', 'poster', 'data', 'background', 'ping']);
+const MEDIA = new Set(['img', 'image', 'source', 'video', 'audio', 'track']);
+const FRAME_SANDBOX = 'allow-scripts allow-popups allow-presentation';
+function safeUrl(value, media) {
+  let u;
+  try { u = new URL(value, location.href); } catch (_) { return false; }
+  return ['http:', 'https:', 'mailto:'].includes(u.protocol) || (media && ['data:', 'blob:'].includes(u.protocol));
+}
+export function deckHtml(html) {
+  const t = document.createElement('template');
+  t.innerHTML = html;
+  for (const el of t.content.querySelectorAll('*')) {
+    const tag = el.localName.toLowerCase();
+    if (DROPPED.has(tag) || /href$/i.test(el.getAttribute('attributeName') || '')) { el.remove(); continue; }
+    for (const a of Array.from(el.attributes)) {
+      const name = a.name.toLowerCase();
+      if (name.startsWith('on') || name === 'srcdoc') el.removeAttribute(a.name);
+      else if (URL_ATTRS.has(name.replace(/^xlink:/, '')) && !safeUrl(a.value, MEDIA.has(tag))) el.removeAttribute(a.name);
+    }
+    if (tag === 'iframe') el.setAttribute('sandbox', FRAME_SANDBOX);
+    if (tag === 'iframe' || tag === 'img') el.removeAttribute('name');
+    if (tag === 'a' || tag === 'area') {
+      el.setAttribute('rel', 'noopener noreferrer');
+      if (el.hasAttribute('target')) el.setAttribute('target', '_blank');
+    }
+  }
+  return t.content;
+}
+
 function mdBlock(s, extraClass) {
   const div = h('div', { class: 'md' + (extraClass ? ' ' + extraClass : '') });
-  div.innerHTML = renderMarkdown(s.body, s.bodyStartLine);
+  div.append(deckHtml(renderMarkdown(s.body, s.bodyStartLine)));
   Array.from(div.children).forEach((c, i) => c.style.setProperty('--i', String(i)));
   return div;
 }
@@ -166,7 +200,7 @@ export async function loadDrawModule(url) {
 // The spoken script: one paragraph per line read aloud.
 export function scriptBlock(lines) {
   const div = h('div', { class: 'script' });
-  lines.forEach(l => { const p = h('p'); p.innerHTML = renderInline(l); div.append(p); });
+  lines.forEach(l => div.append(h('p', {}, deckHtml(renderInline(l)))));
   return div;
 }
 
@@ -324,7 +358,7 @@ export async function mountDeck({ data, model, slug }) {
       h('button', { type: 'button', class: 'linkish', text: 'all slides', onclick: () => { toggleSources(false); toggleAllSources(true); } })));
     if (s.sources.length) {
       const ul = h('ul');
-      s.sources.forEach(src => { const it = h('li'); it.innerHTML = renderInline(src); ul.append(it); });
+      s.sources.forEach(src => ul.append(h('li', {}, deckHtml(renderInline(src)))));
       sourcesPanel.append(ul);
     } else sourcesPanel.append(h('p', { class: 'none', text: 'No sources listed for this slide.' }));
   }
@@ -346,7 +380,7 @@ export async function mountDeck({ data, model, slug }) {
       li.append(h('div', { class: 'src-title' }, h('button', { type: 'button', text: s.title, onclick: () => { toggleAllSources(false); go(i); } })));
       if (s.sources.length) {
         const ul = h('ul');
-        s.sources.forEach(src => { const it = h('li'); it.innerHTML = renderInline(src); ul.append(it); });
+        s.sources.forEach(src => ul.append(h('li', {}, deckHtml(renderInline(src)))));
         li.append(ul);
       } else li.append(h('p', { class: 'none', text: 'No sources listed.' }));
       ol.append(li);
@@ -381,7 +415,9 @@ export async function mountDeck({ data, model, slug }) {
 
   /* lazily loaded tools */
   let editor = null, recorder = null;
-  const toolMsg = h('div', { id: 'tool-msg', role: 'status', hidden: true });
+  const toolText = h('span');
+  const toolMsg = h('div', { id: 'tool-msg', role: 'status', hidden: true }, toolText,
+    h('button', { type: 'button', class: 'rm-x', 'aria-label': 'Close', text: '×', onclick: () => { toolMsg.hidden = true; } }));
   document.body.append(toolMsg);
   // Each tool is created once, also when asked for again while its module
   // loads; a failed load says so and is tried again on the next call.
@@ -389,7 +425,7 @@ export async function mountDeck({ data, model, slug }) {
     let load = null;
     return () => (load ||= create().then(
       tool => { toolMsg.hidden = true; return tool; },
-      e => { load = null; toolMsg.textContent = `Could not load the ${name}: ${e.message}. Check your connection and try again.`; toolMsg.hidden = false; return null; }));
+      e => { load = null; toolText.textContent = `Could not load the ${name}: ${e.message}. Check your connection and try again.`; toolMsg.hidden = false; return null; }));
   };
   const editorTool = lazyTool('editor', async () => (editor = (await import('./editor.js')).createEditor(api)));
   const recorderTool = lazyTool('recorder', async () => (recorder = (await import('./recorder.js')).createRecorder(api)));

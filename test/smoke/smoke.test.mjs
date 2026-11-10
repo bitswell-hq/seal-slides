@@ -383,12 +383,23 @@ test('edit mode: a drawing module is never loaded from the viewer\'s open pull r
 
   // An edit over a module the pull request also changes is a conflict; the branch's module still does not run.
   await draw.fill((await draw.inputValue()) + '\n// mine\n');
+  await page.locator('#tab-source').click();
+  const src = page.locator('#ed-source');
+  await src.fill((await src.inputValue()).replace('title: Seal Slides', 'title: Seal Slides, edited'));
   await page.locator('#editor footer button', { hasText: 'Save to GitHub' }).click();
   await page.locator('#editor footer .result button', { hasText: 'Copy my text' }).waitFor();
   assert.match(await page.locator('#editor footer .result').textContent(), /dial\.js differs in pull request #7.*never loaded from a pull request/);
-  assert.equal(await page.locator('#editor footer .result button').count(), 1, 'no button loads the branch\'s version');
+  assert.deepEqual(await page.locator('#editor footer .result button').allTextContents(), ['Copy my text', 'Drop my change to this file'], 'no button loads the branch\'s version');
   assert.equal(state.tree, undefined, 'nothing was committed');
   assert.match(await draw.inputValue(), /\/\/ mine\n$/);
+
+  // Dropping that one change lets the edit to the slide be saved.
+  await page.locator('#editor footer .result button', { hasText: 'Drop my change to this file' }).click();
+  await page.waitForFunction(() => /^Changed: decks\/example\/slides\/01-title\.md$/.test(document.querySelector('#editor .changed').textContent));
+  await page.locator('#editor footer button', { hasText: 'Save to GitHub' }).click();
+  await page.locator('#editor footer .result a', { hasText: 'pull request #7' }).waitFor();
+  assert.deepEqual(state.tree.tree.map(x => x.path), ['decks/example/slides/01-title.md']);
+  assert.match(state.tree.tree[0].content, /title: Seal Slides, edited/);
   assert.ok(await seals() > 0);
   assert.equal(await page.evaluate(() => window.ranFromBranch), undefined);
   assert.deepEqual(errors, []);
@@ -403,10 +414,97 @@ test('a tool whose module fails to load says so and loads on the next try', asyn
   await page.locator('#tool-msg:not([hidden])').waitFor();
   assert.match(await page.locator('#tool-msg').textContent(), /Could not load the editor/);
   assert.equal(await page.locator('#editor').count(), 0);
+  await page.locator('#tool-msg button').click();
+  assert.ok(await page.locator('#tool-msg').isHidden(), 'the message can be closed');
+  await page.keyboard.press('e');
+  await page.locator('#tool-msg:not([hidden])').waitFor();
   fail = false;
   await page.keyboard.press('e');
   await page.locator('#editor').waitFor();
   assert.ok(await page.locator('#tool-msg').isHidden());
+  await context.close();
+});
+
+test('deck HTML cannot run script in the page or get a handle on its window', async () => {
+  const { page, context, errors } = await openDeck('#1');
+  const got = await page.evaluate(async () => {
+    const { deckHtml, scriptBlock } = await import(new URL('../engine/runtime.js', location.href).href);
+    const html = [
+      '<iframe id="f" name="top2" src="/other/x.html" srcdoc="<script src=/other/x.js></script>" onload="x()"></iframe>',
+      '<iframe id="g" src="javascript:alert(1)" sandbox="allow-scripts allow-same-origin"></iframe>',
+      '<object data="/other/x.html"></object><embed src="/other/x.svg"><script src="/other/x.js"></script>',
+      '<base href="/other/"><meta http-equiv="refresh" content="0;url=/other/"><link rel="stylesheet" href="/other/x.css">',
+      '<form action="/other/"><button id="inform" formaction="/other/">go</button></form><template><p id="tpl">t</p></template>',
+      '<a id="js" href="javascript:alert(1)">a</a><a id="tab" href="java\tscript:alert(1)">b</a><a id="data" href="data:text/html,x">c</a>',
+      '<a id="named" href="/other/x.html" target="w" rel="opener">d</a><a id="plain" href="https://example.org/x">e</a><a id="rel" href="assets/x.pdf">f</a><a id="mail" href="mailto:a@example.org">g</a>',
+      '<img id="img" name="body" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" onerror="x()"><img id="img2" src="assets/photo.png" alt="p">',
+      '<button id="btn" formaction="javascript:alert(1)" onclick="x()">h</button><p id="keep" class="lead" style="color:red" data-line="3">kept <em>text</em></p>',
+      '<svg id="svg"><a id="sa" xlink:href="javascript:alert(1)"><text>i</text></a><use id="u1" href="data:image/svg+xml,x#a"/><use id="u2" href="#seal-A"/>',
+      '<set attributeName="href" to="javascript:alert(1)"/><animate attributeName="xlink:href" values="javascript:alert(1)"/><animate id="ok" attributeName="opacity" values="0;1"/>',
+      '<foreignObject><iframe id="fo" src="/other/y.html"></iframe></foreignObject><script>window.ranInline = 1</script></svg>',
+    ].join('');
+    const div = document.createElement('div');
+    div.append(deckHtml(html));
+    document.body.append(div);
+    const at = (id, ...names) => { const e = div.querySelector('#' + id); return e ? names.map(n => e.getAttribute(n)) : 'missing'; };
+    const out = {
+      dropped: div.querySelectorAll('object, embed, script, base, meta, link, form, template, set, #inform, #tpl').length,
+      animates: Array.from(div.querySelectorAll('animate'), e => e.id),
+      handlers: Array.from(div.querySelectorAll('*')).flatMap(e => e.getAttributeNames().filter(n => /^on|^srcdoc$|^formaction$/i.test(n))),
+      f: at('f', 'sandbox', 'src', 'name'), g: at('g', 'sandbox', 'src'), fo: at('fo', 'sandbox'),
+      js: at('js', 'href'), tab: at('tab', 'href'), data: at('data', 'href'), sa: at('sa', 'xlink:href'),
+      named: at('named', 'href', 'target', 'rel'), plain: at('plain', 'href', 'target', 'rel'), rel: at('rel', 'href'), mail: at('mail', 'href'),
+      img: at('img', 'src', 'name'), img2: at('img2', 'src', 'alt'), u1: at('u1', 'href'), u2: at('u2', 'href'),
+      keep: [div.querySelector('#keep').outerHTML],
+      script: scriptBlock(['say <iframe src="/other/z.html"></iframe> **this**']).innerHTML,
+      ran: window.ranInline,
+    };
+    div.remove();
+    return out;
+  });
+  const SANDBOX = 'allow-scripts allow-popups allow-presentation';
+  assert.equal(got.dropped, 0);
+  assert.deepEqual(got.animates, ['ok']);
+  assert.deepEqual(got.handlers, []);
+  assert.deepEqual(got.f, [SANDBOX, '/other/x.html', null]);
+  assert.deepEqual(got.g, [SANDBOX, null]);
+  assert.deepEqual(got.fo, [SANDBOX]);
+  assert.deepEqual([got.js, got.tab, got.data, got.sa], [[null], [null], [null], [null]]);
+  assert.deepEqual(got.named, ['/other/x.html', '_blank', 'noopener noreferrer']);
+  assert.deepEqual(got.plain, ['https://example.org/x', null, 'noopener noreferrer']);
+  assert.deepEqual([got.rel, got.mail], [['assets/x.pdf'], ['mailto:a@example.org']]);
+  assert.deepEqual(got.img, ['data:image/gif;base64,R0lGODlhAQABAAAAACw=', null]);
+  assert.deepEqual(got.img2, ['assets/photo.png', 'p']);
+  assert.deepEqual([got.u1, got.u2], [[null], ['#seal-A']]);
+  assert.deepEqual(got.keep, ['<p id="keep" class="lead" style="color:red" data-line="3">kept <em>text</em></p>']);
+  assert.equal(got.script, `<p>say <iframe src="/other/z.html" sandbox="${SANDBOX}"></iframe> <strong>this</strong></p>`);
+  assert.equal(got.ran, undefined);
+  // The page's Content Security Policy already refuses the handlers when the text is parsed, and says so.
+  assert.deepEqual(errors.filter(e => !/^Executing inline event handler violates/.test(e)), []);
+  await context.close();
+});
+
+test('edit mode: a frame and a link in a slide loaded from the viewer\'s pull request are fenced in', async () => {
+  const { page, context, state } = await openDeck('#3');
+  await page.keyboard.press('e');
+  await page.locator('#editor').waitFor();
+  const file = 'decks/example/slides/03-markdown.md';
+  const built = await page.locator('#ed-source').inputValue();
+  state.pulls = [{ number: 7, html_url: 'https://github.com/acme/decks/pull/7', user: { login: 'octo' }, head: { ref: 'seal-slides/example/octo-1', sha: 'pr-head', repo: { full_name: 'acme/decks', name: 'decks', owner: { login: 'acme' } } }, base: { ref: 'main' } }];
+  state.prFiles = [{ filename: file, status: 'modified' }];
+  state.contents[file] = built.replace('  - "engine/loader.js"', '  - "<a href=\\"/other/x.html\\" target=\\"w\\" rel=\\"opener\\">a source</a>"') +
+    '\n<iframe src="/other/x.html" srcdoc="<script src=/other/x.js></script>"></iframe>\n\n<object data="/other/x.html"></object>\n';
+  await signIn(page);
+  const frame = page.locator('.slide.active .md iframe');
+  await frame.waitFor({ state: 'attached' });
+  assert.equal(await frame.getAttribute('sandbox'), 'allow-scripts allow-popups allow-presentation');
+  assert.equal(await frame.getAttribute('srcdoc'), null);
+  assert.equal(await page.locator('.slide.active object').count(), 0);
+  await page.locator('#editor header button').click();
+  await page.keyboard.press('s');
+  const a = page.locator('#sources-panel a', { hasText: 'a source' });
+  await a.waitFor();
+  assert.deepEqual([await a.getAttribute('target'), await a.getAttribute('rel')], ['_blank', 'noopener noreferrer']);
   await context.close();
 });
 

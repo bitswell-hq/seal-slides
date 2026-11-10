@@ -85,6 +85,16 @@ The body is ordinary Markdown (GitHub-flavoured): paragraphs, lists,
 
 Relative links and image paths resolve against the deck folder (where the page is served), not the `slides/` folder: write `assets/photo.png`. Raw HTML is allowed in the body, so a slide can lay out columns with `<div class="cols">…</div>` (leave a blank line after the opening tag so the Markdown inside is still read). Other classes the engine styles inside slides: `lead` (a larger display paragraph) and `muted` (secondary ink).
 
+Slide text is treated as text that may come from someone else's pull request, so the engine cleans the HTML of a slide body, a script line and a source before it reaches the page. Scripts never run from it:
+
+- `<iframe>` is kept but sandboxed (`allow-scripts allow-popups allow-presentation`, without `allow-same-origin`) and loses `srcdoc`, so an embed runs in an origin of its own and cannot reach the deck page. An embed that needs its own site's cookies or storage will not work.
+- `<script>`, `<object>`, `<embed>`, `<applet>`, `<frame>`, `<frameset>`, `<portal>`, `<fencedframe>`, `<base>`, `<meta>`, `<link>`, `<form>` and `<template>` are removed, as are SVG animations of a link's `href`.
+- `on…` handler attributes are removed. `href`, `src`, `action`, `formaction`, `poster`, `data`, `background` and `ping` are removed unless they are `http:`, `https:` or `mailto:` URLs (relative paths count as these); images and media may also use `data:` and `blob:`.
+- Every link gets `rel="noopener noreferrer"`, and a link with a `target` opens in a new tab, so a page it opens holds no handle on the deck.
+- `name` is removed from images and frames, which could otherwise shadow properties of the document.
+
+Titles, kickers, alt text, status labels and comments are always inserted as plain text.
+
 ### Speaker script and sources
 
 `N` shows the current slide's script, headed by its target time, its word count and a reminder that the sources are behind `S`. `S` shows the current slide's sources instead, with a link to every slide's sources on one page. The example deck's script is 306 words, about 2:02 at 150 words a minute; its slides' targets add up to 2:15, inside the deck's 3:00 limit. The editor's Script tab shows the estimate for each slide as you write.
@@ -170,7 +180,7 @@ The token is kept in the page's memory only and is sent only to `api.github.com`
 
 Keeping the token in memory does not put it out of reach of everything. Who can read it:
 
-- Any script that runs in the deck page: the engine, the deck's drawing modules as published, and the text you type into the Drawing tab when you press Redraw.
+- Any script that runs in the deck page: the engine, the deck's drawing modules as published, and the text you type into the Drawing tab when you press Redraw. HTML in slide text is cleaned so that it runs no script in the page (see Markdown slides above).
 - A page of the same origin that holds a handle on the deck's window, because it framed or opened it. The editor therefore offers no sign-in when the page is inside a frame or has an opener, and shows a message instead of the token field. This check stands in for a `frame-ancestors 'none'` response header: GitHub Pages cannot send headers, and a `<meta>` Content Security Policy cannot set `frame-ancestors`. It is a best effort, since a same-origin page that opened the deck can clear the opener before the check runs.
 
 So the token is as safe as the pages published on that origin are; sign in only where you trust them.
@@ -192,7 +202,7 @@ Edit mode asks you to sign in before the first edit: the editor's text boxes are
 
 Only text is loaded from a pull request's branch: slide Markdown with its script and sources. A drawing module is script, and other people who can push to the branch may have changed it, so the page only ever runs drawing modules from the published, merged site, never from a pull request, with or without a click. The Drawing tab always starts from the published module. You can edit it, redraw with your own text and save it to your pull request, but a change to an animated slide's code shows on the site, and in the editor after a reload, only once that pull request is merged. Until then, saving another edit of the same module from a reloaded page reports a conflict, because the pull request's version differs from the published one the edit started from.
 
-Before committing to an existing branch, the editor checks that each file the pull request changes is still the text it loaded; if it changed in the pull request in between, nothing is committed, and the editor links the pull request and offers to copy your text and to load the newer version of that file, so you can put your edit back. Your changes to other files stay as they are. A file the pull request does not change is committed as you edited it.
+Before committing to an existing branch, the editor checks that each file the pull request changes is still the text it loaded; if it changed in the pull request in between, nothing is committed, and the editor links the pull request and offers to copy your text and to load the newer version of that file, so you can put your edit back. For a drawing module, which is never loaded from a pull request, it offers instead to drop your change to that one file. Either way your changes to other files stay as they are and can then be saved. A file the pull request does not change is committed as you edited it.
 
 ### Comments
 
@@ -244,7 +254,7 @@ npm run test:smoke                 # headless Chromium
 - `test/build.test.mjs`: the example deck builds; the page's CSP matches its import map; deck text cannot close the page's script element; a broken deck is reported with file and line and writes nothing.
 - `test/recorder.test.mjs`: the WebM duration fix and the choice of MP4 or WebM.
 - `test/serve.test.mjs`: the dev server serves its folder and nothing beside it.
-- `test/smoke/smoke.test.mjs`: in headless Chromium with fake media devices and a fake GitHub API: navigation, hash, marks, script and sources panels, theme, portrait drawings; read-only comments; edit mode (sign-in before the first edit with the token stored nowhere, live preview, a YAML error, script and sources edits, save, a comment on a selected line, a slide change while typing, loading the viewer's open pull request, a drawing module it changed never being loaded, a tool whose module fails to load, no sign-in in a page that is framed or has an opener, and a conflict on one file with its text copied and its newer version loaded while another file's edit is kept); recording with pause (the file is 1920×1080 with an audio track, its frames match the painted slides and hold nothing of the presenter panel), a blocked microphone and a cancelled countdown; and each painted slide against a screenshot of the live slide.
+- `test/smoke/smoke.test.mjs`: in headless Chromium with fake media devices and a fake GitHub API: navigation, hash, marks, script and sources panels, theme, portrait drawings; read-only comments; edit mode (sign-in before the first edit with the token stored nowhere, live preview, a YAML error, script and sources edits, save, a comment on a selected line, a slide change while typing, loading the viewer's open pull request, a drawing module it changed never being loaded and its conflict dropped so other edits save, deck HTML cleaned of script, frames and window handles (directly and in a slide loaded from a pull request), a tool whose module fails to load with a message that can be closed, no sign-in in a page that is framed or has an opener, and a conflict on one file with its text copied and its newer version loaded while another file's edit is kept); recording with pause (the file is 1920×1080 with an audio track, its frames match the painted slides and hold nothing of the presenter panel), a blocked microphone and a cancelled countdown; and each painted slide against a screenshot of the live slide.
 
 Verified by hand for this version: the example deck's slides in light theme at 1440×900 and in portrait, edit mode and a recording in headless Chromium 156, viewed as screenshots. Not verified: Safari and Firefox, a real microphone, signing in with a real token against github.com, and the Pages workflow (it runs once this repository's settings above are in place).
 
