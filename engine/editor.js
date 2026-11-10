@@ -82,7 +82,7 @@ export function createEditor(deck) {
   const drawTa = ta('ed-drawing', 'Drawing module');
   const drawErr = h('p', { class: 'err', 'aria-live': 'polite' });
   const applyBtn = h('button', { class: 'act', type: 'button', text: 'Redraw (Ctrl+Enter)' });
-  const drawHint = h('p', { class: 'hint', text: 'Redraw imports this text as the drawing module. It cannot import other files by relative path.' });
+  const drawHint = h('p', { class: 'hint', text: 'Redraw imports this text as the drawing module. It cannot import other files by relative path. This is the published module: a saved change shows here after its pull request is merged.' });
 
   panels.source = h('section', { role: 'tabpanel', id: 'panel-source', 'aria-labelledby': 'tab-source' }, srcTa,
     h('div', {}, srcErr, h('p', { class: 'hint', text: 'The slide redraws as you type. Select text here or on the slide to comment on it.' })));
@@ -90,11 +90,9 @@ export function createEditor(deck) {
     h('div', {}, scriptHint, h('p', { class: 'hint', text: 'One short line per line read aloud; a blank line is a pause. Saved as notes in the front matter.' })));
   panels.sources = h('section', { role: 'tabpanel', id: 'panel-sources', 'aria-labelledby': 'tab-sources' }, sourcesTa,
     h('p', { class: 'hint', text: 'One source per line; Markdown links work. Press S to see every slide\'s sources.' }));
-  const prDrawNote = h('span', { class: 'hint', 'aria-live': 'polite' });
-  const prDrawBtn = h('button', { class: 'act', type: 'button', text: 'Load drawing from your PR' });
-  const prDraw = h('div', { class: 'row', id: 'ed-pr-drawing', hidden: true }, prDrawNote, prDrawBtn);
   panels.drawing = h('section', { role: 'tabpanel', id: 'panel-drawing', 'aria-labelledby': 'tab-drawing' }, drawTa,
-    h('div', {}, prDraw, h('div', { class: 'row' }, applyBtn, drawErr), drawHint));
+    h('div', { class: 'row' }, applyBtn, drawErr), drawHint);
+  panels.drawing.style.gridTemplateRows = 'minmax(0, 1fr) auto auto';
 
   const commentList = h('ol', { class: 'comments', 'aria-live': 'polite' });
   const anchorLabel = h('p', { class: 'anchor' });
@@ -198,24 +196,17 @@ export function createEditor(deck) {
     saveBtn.disabled = busy || !list.length || !repo;
     discardBtn.disabled = !list.length;
     const waiting = mine ? list.filter(f => mine.files.has(f.path)) : [];
-    const drawings = mine ? [...new Set(deck.model.slides.map(drawPath))].filter(p => p && mine.files.has(p)) : [];
     const names = l => l.map(x => x.split('/').pop()).join(', ');
     pendingNote.textContent = '';
-    pendingNote.hidden = !mine || !(mine.loaded.length || waiting.length || drawings.length);
+    pendingNote.hidden = !mine || !(mine.loaded.length || waiting.length);
     if (!pendingNote.hidden) {
       const pr = link(mine.pr.url, `pull request #${mine.pr.number}`);
       if (mine.loaded.length) pendingNote.append(`Editing ${names(mine.loaded)} as saved in your open `, pr, '.');
       else pendingNote.append('Your open ', pr, ' is where saves go.');
       if (waiting.length) pendingNote.append(` It holds a newer ${names(waiting.map(f => f.path))}; copy your text, then load the newer version.`);
-      if (drawings.length) pendingNote.append(` It changes ${names(drawings)}, which is not drawn until you load it in the Drawing tab.`);
     }
     const locked = !!repo && (!login || loading);
-    const d = files.get(drawTa.dataset.path);
-    const held = !!d && drawings.includes(d.path);
-    prDraw.hidden = !held;
-    prDrawNote.textContent = held ? `Your pull request #${mine.pr.number} holds another version of ${names([d.path])}, last changed there by ${mine.authors.get(d.path) || 'someone unknown'}. Loading it runs it in this page.` : '';
-    for (const t of [srcTa, scriptTa, sourcesTa]) t.readOnly = locked;
-    drawTa.readOnly = locked || held;
+    for (const t of [srcTa, scriptTa, sourcesTa, drawTa]) t.readOnly = locked;
     signIn.hidden = !repo || !!login;
     whoRow.hidden = !login;
     who.textContent = login ? `Signed in as ${login}` : '';
@@ -274,7 +265,6 @@ export function createEditor(deck) {
     if (f) return f;
     f = { path, base: text, text, built: text, kind: 'draw', draw: s.draw };
     files.set(path, f);
-    adopt(f);
     return f;
   }
   async function loadDrawing() {
@@ -294,21 +284,7 @@ export function createEditor(deck) {
       }
     }
     if (drawTa.dataset.path === path && (moved || document.activeElement !== drawTa)) drawTa.value = f.text;
-    syncFooter();
   }
-  // The pull request's version of a drawing module is script anyone who can
-  // push to its branch may have written, so it runs only when asked for.
-  prDrawBtn.addEventListener('click', async () => {
-    const f = files.get(drawTa.dataset.path);
-    const text = f && mine ? mine.files.get(f.path) : undefined;
-    if (text === undefined) return;
-    mine.files.delete(f.path);
-    f.base = f.text = text;
-    mine.loaded.push(f.path);
-    drawTa.value = text;
-    syncFooter();
-    await redraw(f);
-  });
   drawTa.addEventListener('input', () => {
     const f = files.get(drawTa.dataset.path);
     if (f) { f.text = drawTa.value; syncFooter(); }
@@ -341,13 +317,12 @@ export function createEditor(deck) {
   }
 
   // Take the pull request's version of a slide as what the editor edits.
-  // A file with unsaved changes keeps them; discarding them loads it. A
-  // drawing module is never taken here: see prDrawBtn.
+  // A file with unsaved changes keeps them; discarding them loads it.
   function adopt(f) {
     const text = mine ? mine.files.get(f.path) : undefined;
     if (text === undefined) return;
     if (text === f.base) { mine.files.delete(f.path); return; }
-    if (f.kind === 'draw' || f.text !== f.base) return;
+    if (f.text !== f.base) return;
     mine.files.delete(f.path);
     f.base = f.text = text;
     mine.loaded.push(f.path);
@@ -457,9 +432,10 @@ export function createEditor(deck) {
       saveResult.textContent = '';
     });
     saveResult.textContent = '';
-    saveResult.append(`Not saved: ${f.path.split('/').pop()} changed in `, link(conflict.pr.url, `pull request #${conflict.pr.number}`),
-      ` since the editor loaded it. Copy your text, then load the newer version of this file${f.kind === 'draw' ? ' in the Drawing tab' : ''}; your other changes stay. `, copyBtn);
-    if (f.kind === 'slide' && mine && mine.files.has(f.path)) saveResult.append(' ', loadBtn);
+    saveResult.append(`Not saved: ${f.path.split('/').pop()} ${f.kind === 'draw' ? 'differs' : 'changed'} in `, link(conflict.pr.url, `pull request #${conflict.pr.number}`),
+      f.kind === 'draw' ? ' from the published module this edit started from. A drawing module is never loaded from a pull request, so copy your text and make this edit once that pull request is merged; your other changes stay. '
+        : ' since the editor loaded it. Copy your text, then load the newer version of this file; your other changes stay. ', copyBtn);
+    if (mine && mine.files.has(f.path)) saveResult.append(' ', loadBtn);
   }
   saveBtn.addEventListener('click', save);
   // Back to what the editor loaded for a file, or to the pull request's newer version of it.

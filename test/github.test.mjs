@@ -178,10 +178,6 @@ test('a second edit builds on the viewer\'s open pull request, not on the page a
       assert.equal(decodeURIComponent(m[2]), branch);
       return m[1] in onBranch ? { content: b64(onBranch[m[1]]) } : R(404, { message: 'Not Found' });
     }],
-    ['GET', /^\/repos\/acme\/decks\/commits\?sha=([^&]+)&path=([^&]+)&per_page=1$/, m => {
-      assert.equal(decodeURIComponent(m[1]), branch);
-      return decodeURIComponent(m[2]).endsWith('dial.js') ? [{ author: { login: 'mallory' }, commit: { author: { name: 'Mallory' } } }] : [{ author: null, commit: { author: { name: 'Octo Cat' } } }];
-    }],
     ['POST', /^\/repos\/acme\/decks\/git\/trees$/, (_, body) => { tree = body; return R(201, { sha: 'new-tree' }); }],
     ...commitRoutes('acme', 'decks', branch, 'branch-head'),
   ]);
@@ -189,8 +185,8 @@ test('a second edit builds on the viewer\'s open pull request, not on the page a
   const p = await s.pending();
   assert.deepEqual(p.pr, { number: 3, url: 'https://github.com/acme/decks/pull/3' });
   assert.equal(p.branch, branch);
-  assert.deepEqual([...p.files], [[path, 'T1'], ['decks/example/animations/dial.js', 'draw 1']]);
-  assert.deepEqual([...p.authors], [[path, 'Octo Cat'], ['decks/example/animations/dial.js', 'mallory']], 'who last changed each file on the branch');
+  assert.deepEqual([...p.files], [[path, 'T1']], 'only Markdown is read from the branch');
+  assert.ok(!gh.paths().some(x => x.includes('dial.js')), 'the branch\'s drawing module is not fetched');
   assert.ok(!gh.paths().some(x => !x.startsWith('GET ')), 'looking writes nothing');
 
   // The page was built with T0. Saving from T0 is refused; saving from what pending() loaded goes through.
@@ -242,7 +238,6 @@ test('without push access, pending and saveEdit use the pull request\'s fork bra
     ['GET', /^\/repos\/acme\/decks\/pulls\?state=open/, () => [pull]],
     ['GET', /^\/repos\/acme\/decks\/pulls\/9\/files/, () => [{ filename: path, status: 'modified' }]],
     ['GET', /^\/repos\/octo\/decks\/contents\//, () => ({ content: b64('T1') })],
-    ['GET', /^\/repos\/octo\/decks\/commits\?sha=/, () => [{ author: { login: 'octo' } }]],
     ...commitRoutes('octo', 'decks', branch, 'fork-head'),
   ]);
   const s = store(gh);

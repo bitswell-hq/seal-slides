@@ -157,7 +157,7 @@ Swipe in any direction on a touch screen, or tap the right or left of the slide.
 
 - **Slide**: the slide's Markdown file. The slide redraws as you type; a front-matter mistake is shown with its line and the last good version stays on screen.
 - **Script** and **Sources**: the slide's `notes` and `sources`, one line each. Typing here rewrites only that key of the front matter.
-- **Drawing**: the slide's drawing module, for animated slides. Redraw (Ctrl+Enter) imports the edited text and redraws the slide.
+- **Drawing**: the slide's drawing module as published, for animated slides. Redraw (Ctrl+Enter) imports the edited text and redraws the slide.
 - **Comments**: the slide's comments, and a box to write one.
 
 ### Signing in
@@ -170,7 +170,7 @@ The token is kept in the page's memory only and is sent only to `api.github.com`
 
 Keeping the token in memory does not put it out of reach of everything. Who can read it:
 
-- Any script that runs in the deck page: the engine, the deck's drawing modules as published, and a drawing module from your pull request once you load it (see below).
+- Any script that runs in the deck page: the engine, the deck's drawing modules as published, and the text you type into the Drawing tab when you press Redraw.
 - A page of the same origin that holds a handle on the deck's window, because it framed or opened it. The editor therefore offers no sign-in when the page is inside a frame or has an opener, and shows a message instead of the token field. This check stands in for a `frame-ancestors 'none'` response header: GitHub Pages cannot send headers, and a `<meta>` Content Security Policy cannot set `frame-ancestors`. It is a best effort, since a same-origin page that opened the deck can clear the opener before the check runs.
 
 So the token is as safe as the pages published on that origin are; sign in only where you trust them.
@@ -190,7 +190,7 @@ Pull requests from a fork are opened with "Allow edits by maintainers" off, so o
 
 Edit mode asks you to sign in before the first edit: the editor's text boxes are read-only until you have. Viewing the deck and reading comments need no sign-in. When a pull request of yours from the editor is open, signing in loads that pull request's version of each slide it changed, redraws those slides and says so with a link, so a second edit builds on the first and not on the page as built.
 
-A drawing module the pull request changed is script, and other people who can push to the branch may have changed it, so it is never run on its own. The slide keeps the published drawing, and the Drawing tab says that the pull request holds another version and who last changed that file on the branch (the author of the latest commit to it). **Load drawing from your PR** loads and runs it; until then the Drawing tab's text is read-only, so an edit cannot be made over the pull request's version.
+Only text is loaded from a pull request's branch: slide Markdown with its script and sources. A drawing module is script, and other people who can push to the branch may have changed it, so the page only ever runs drawing modules from the published, merged site, never from a pull request, with or without a click. The Drawing tab always starts from the published module. You can edit it, redraw with your own text and save it to your pull request, but a change to an animated slide's code shows on the site, and in the editor after a reload, only once that pull request is merged. Until then, saving another edit of the same module from a reloaded page reports a conflict, because the pull request's version differs from the published one the edit started from.
 
 Before committing to an existing branch, the editor checks that each file the pull request changes is still the text it loaded; if it changed in the pull request in between, nothing is committed, and the editor links the pull request and offers to copy your text and to load the newer version of that file, so you can put your edit back. Your changes to other files stay as they are. A file the pull request does not change is committed as you edited it.
 
@@ -240,11 +240,11 @@ npm run test:smoke                 # headless Chromium
 ```
 
 - `test/loader.test.mjs`: front matter, line maps, ordering, durations, errors with file and line, Markdown rendering with line anchors, front-matter edits that round-trip through YAML, finding a quote in a file.
-- `test/github.test.mjs`: the persistence layer against a mocked GitHub API: new branch and pull request, reusing the viewer's pull request, loading its version of the files and who last changed each, conflicts, forks (and syncing a fork that lags), line and file review comments, the viewer's own pull request found among many open ones, re-finding a quote in a newer file, comment files, and reading comments without a token.
+- `test/github.test.mjs`: the persistence layer against a mocked GitHub API: new branch and pull request, reusing the viewer's pull request, loading its version of the Markdown files and never its drawing modules, conflicts, forks (and syncing a fork that lags), line and file review comments, the viewer's own pull request found among many open ones, re-finding a quote in a newer file, comment files, and reading comments without a token.
 - `test/build.test.mjs`: the example deck builds; the page's CSP matches its import map; deck text cannot close the page's script element; a broken deck is reported with file and line and writes nothing.
 - `test/recorder.test.mjs`: the WebM duration fix and the choice of MP4 or WebM.
 - `test/serve.test.mjs`: the dev server serves its folder and nothing beside it.
-- `test/smoke/smoke.test.mjs`: in headless Chromium with fake media devices and a fake GitHub API: navigation, hash, marks, script and sources panels, theme, portrait drawings; read-only comments; edit mode (sign-in before the first edit with the token stored nowhere, live preview, a YAML error, script and sources edits, save, a comment on a selected line, a slide change while typing, loading the viewer's open pull request, a drawing it changed running only after an explicit load that names its last author, no sign-in in a page that is framed or has an opener, and a conflict on one file with its text copied and its newer version loaded while another file's edit is kept); recording with pause (the file is 1920×1080 with an audio track, its frames match the painted slides and hold nothing of the presenter panel), a blocked microphone and a cancelled countdown; and each painted slide against a screenshot of the live slide.
+- `test/smoke/smoke.test.mjs`: in headless Chromium with fake media devices and a fake GitHub API: navigation, hash, marks, script and sources panels, theme, portrait drawings; read-only comments; edit mode (sign-in before the first edit with the token stored nowhere, live preview, a YAML error, script and sources edits, save, a comment on a selected line, a slide change while typing, loading the viewer's open pull request, a drawing module it changed never being loaded, a tool whose module fails to load, no sign-in in a page that is framed or has an opener, and a conflict on one file with its text copied and its newer version loaded while another file's edit is kept); recording with pause (the file is 1920×1080 with an audio track, its frames match the painted slides and hold nothing of the presenter panel), a blocked microphone and a cancelled countdown; and each painted slide against a screenshot of the live slide.
 
 Verified by hand for this version: the example deck's slides in light theme at 1440×900 and in portrait, edit mode and a recording in headless Chromium 156, viewed as screenshots. Not verified: Safari and Firefox, a real microphone, signing in with a real token against github.com, and the Pages workflow (it runs once this repository's settings above are in place).
 

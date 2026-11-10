@@ -482,16 +482,16 @@ html[data-recording="paused"] .rp-dot { background: var(--ink-2); }
 }
 .rp-btns button:focus-visible, .rm-x:focus-visible, #rec-msg a:focus-visible { outline: 2px solid var(--now); outline-offset: 2px; }
 .rp-note { font-size: 12px; color: var(--ink-2); margin-top: 10px !important; }
-#rec-msg {
+#rec-msg, #tool-msg {
   position: fixed; left: 50%; transform: translateX(-50%); bottom: 74px; z-index: 16;
   width: max-content; max-width: min(640px, calc(100vw - 28px));
   background: var(--paper-2); border: 1px solid var(--rule); border-radius: 8px;
   padding: 12px 40px 12px 16px; font-size: 14px; line-height: 1.45; color: var(--ink);
 }
-#rec-msg.err { border-color: var(--next); }
+#rec-msg.err, #tool-msg { border-color: var(--next); }
 #rec-msg a { color: var(--now); }
 #rec-msg kbd { font-family: var(--f-code); font-size: .9em; }
 .rm-x { position: absolute; top: 6px; right: 8px; appearance: none; border: 0; background: transparent; color: var(--ink-2); font-size: 18px; line-height: 1; cursor: pointer; padding: 4px; }
 @media print {
-  .chrome, #rec-panel, #rec-count, #rec-msg, #notes-panel, #sources-panel, #editor { display: none !important; }
+  .chrome, #rec-panel, #rec-count, #rec-msg, #tool-msg, #notes-panel, #sources-panel, #editor { display: none !important; }
 }

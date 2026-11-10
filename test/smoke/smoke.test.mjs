@@ -54,7 +54,6 @@ function fakeGitHub(page, state) {
     if (m === 'GET' && p === '/user') return req.headers().authorization ? json(route, 200, { login: 'octo' }) : json(route, 401, { message: 'Requires authentication' });
     if (m === 'GET' && p === '/repos/acme/decks') return json(route, 200, { default_branch: 'main', permissions: { push: true } });
     if (m === 'GET' && p.startsWith('/repos/acme/decks/pulls/comments')) return json(route, 200, state.reviewComments);
-    if (m === 'GET' && p.startsWith('/repos/acme/decks/commits?sha=')) return json(route, 200, [{ author: { login: state.lastAuthor || 'octo' } }]);
     if (m === 'GET' && p.startsWith('/repos/acme/decks/pulls?state=open')) return json(route, 200, state.pulls);
     if (m === 'GET' && /^\/repos\/acme\/decks\/pulls\/7\/files/.test(p)) return json(route, 200, state.prFiles);
     const held = m === 'GET' && /^\/repos\/acme\/decks\/contents\/([^?]+)\?ref=/.exec(p);
@@ -362,40 +361,52 @@ test('edit mode: signing in loads the viewer\'s open pull request, and the next 
   await context.close();
 });
 
-test('edit mode: a drawing the viewer\'s open pull request changed runs only when they load it', async () => {
+test('edit mode: a drawing module is never loaded from the viewer\'s open pull request', async () => {
   const { page, context, errors, state } = await openDeck('#1');
   const seals = () => page.locator('.slide.active .stage svg use').count();
-  assert.ok(await seals() > 0, 'the built drawing places the seal');
   await page.keyboard.press('e');
   await page.locator('#editor').waitFor();
   const file = 'decks/example/animations/dial.js';
-  const theirs = 'window.ranFromBranch = true;\nexport default { viewBox: [\'0 0 800 800\', \'0 0 800 800\'], draw(c) { c.circle(400, 400, 100, { k: \'now\', w: 1 }); } };\n';
   state.pulls = [{ number: 7, html_url: 'https://github.com/acme/decks/pull/7', user: { login: 'octo' }, head: { ref: 'seal-slides/example/octo-1', sha: 'pr-head', repo: { full_name: 'acme/decks', name: 'decks', owner: { login: 'acme' } } }, base: { ref: 'main' } }];
   state.prFiles = [{ filename: file, status: 'modified' }];
-  state.contents[file] = theirs;
-  state.lastAuthor = 'mallory';
+  state.contents[file] = 'window.ranFromBranch = true;\nexport default { viewBox: [\'0 0 800 800\', \'0 0 800 800\'], draw(c) { c.circle(400, 400, 100, { k: \'now\', w: 1 }); } };\n';
 
-  // Signing in and opening the Drawing tab show the built module and run nothing from the branch.
+  // The Drawing tab starts from the published module, and nothing offers the branch's.
   await signIn(page);
-  await page.locator('#editor footer').getByText('It changes dial.js, which is not drawn until you load it in the Drawing tab.').waitFor();
   await page.locator('#tab-drawing').click();
-  await page.locator('#ed-pr-drawing:not([hidden])').waitFor();
-  assert.match(await page.locator('#ed-pr-drawing').textContent(), /pull request #7 holds another version of dial\.js, last changed there by mallory/);
   const draw = page.locator('#ed-drawing');
-  assert.match(await draw.inputValue(), /The title drawing/);
-  assert.equal(await draw.evaluate(t => t.readOnly), true, 'the built text is not edited over the pull request\'s');
+  await page.waitForFunction(() => /The title drawing/.test(document.querySelector('#ed-drawing').value));
+  assert.equal(await draw.evaluate(t => t.readOnly), false);
+  assert.equal(await page.locator('#panel-drawing button').count(), 1, 'Redraw is the only button');
+  assert.ok(await seals() > 0, 'the published drawing is on the slide');
+  assert.ok(!state.calls.some(c => c.p.includes('/contents/')), 'the branch\'s module was not fetched');
+
+  // An edit over a module the pull request also changes is a conflict; the branch's module still does not run.
+  await draw.fill((await draw.inputValue()) + '\n// mine\n');
+  await page.locator('#editor footer button', { hasText: 'Save to GitHub' }).click();
+  await page.locator('#editor footer .result button', { hasText: 'Copy my text' }).waitFor();
+  assert.match(await page.locator('#editor footer .result').textContent(), /dial\.js differs in pull request #7.*never loaded from a pull request/);
+  assert.equal(await page.locator('#editor footer .result button').count(), 1, 'no button loads the branch\'s version');
+  assert.equal(state.tree, undefined, 'nothing was committed');
+  assert.match(await draw.inputValue(), /\/\/ mine\n$/);
   assert.ok(await seals() > 0);
   assert.equal(await page.evaluate(() => window.ranFromBranch), undefined);
-
-  await page.locator('#ed-pr-drawing button', { hasText: 'Load drawing from your PR' }).click();
-  await page.waitForFunction(() => document.querySelectorAll('.slide.active .stage svg use').length === 0 && document.querySelectorAll('.slide.active .stage svg circle').length === 1);
-  assert.equal(await page.evaluate(() => window.ranFromBranch), true);
-  assert.equal(await draw.inputValue(), theirs);
-  assert.equal(await draw.evaluate(t => t.readOnly), false);
-  assert.ok(await page.locator('#ed-pr-drawing').isHidden());
-  assert.match(await page.locator('#editor footer').textContent(), /Editing dial\.js as saved in your open pull request #7/);
-  assert.match(await page.locator('#editor .changed').textContent(), /No changes/);
   assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('a tool whose module fails to load says so and loads on the next try', async () => {
+  const { page, context } = await openDeck('#1');
+  let fail = true;
+  await page.route('**/engine/editor.js', route => (fail ? route.abort() : route.continue()));
+  await page.keyboard.press('e');
+  await page.locator('#tool-msg:not([hidden])').waitFor();
+  assert.match(await page.locator('#tool-msg').textContent(), /Could not load the editor/);
+  assert.equal(await page.locator('#editor').count(), 0);
+  fail = false;
+  await page.keyboard.press('e');
+  await page.locator('#editor').waitFor();
+  assert.ok(await page.locator('#tool-msg').isHidden());
   await context.close();
 });
 

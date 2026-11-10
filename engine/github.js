@@ -187,25 +187,21 @@ export class DeckStore {
     return { owner: at.owner, name: at.name, branch, pr: null, fork, create: true, baseRef, from: this.repo.sha, defaultBranch: info.default_branch };
   }
 
-  // The deck's files as the viewer's open pull request holds them, by path,
-  // so that the next edit builds on the last one rather than on the page as
-  // built, and who last changed each on the branch. Null when the viewer has
-  // no open pull request.
+  // The deck's Markdown files as the viewer's open pull request holds them,
+  // by path, so that the next edit builds on the last one rather than on the
+  // page as built. Only text is read from a pull request's branch, never a
+  // drawing module. Null when the viewer has no open pull request.
   async pending() {
     const { pr, home } = await this.lookup();
     if (!pr) return null;
     const changed = await this.client.get(`${this.base}/pulls/${pr.number}/files?per_page=100`);
     const files = new Map();
-    const authors = new Map();
     for (const x of changed) {
-      if (x.status === 'removed' || !x.filename.startsWith(this.deckDir + '/') || x.filename.startsWith(this.deckDir + '/comments/')) continue;
+      if (x.status === 'removed' || !x.filename.endsWith('.md') || !x.filename.startsWith(this.deckDir + '/') || x.filename.startsWith(this.deckDir + '/comments/')) continue;
       const text = await this.readFile(home.owner, home.name, x.filename, pr.head.ref);
-      if (text == null) continue;
-      files.set(x.filename, text);
-      const [last] = await this.client.get(`/repos/${seg(home.owner)}/${seg(home.name)}/commits?sha=${encodeURIComponent(pr.head.ref)}&path=${encodeURIComponent(x.filename)}&per_page=1`);
-      if (last) authors.set(x.filename, last.author ? last.author.login : last.commit.author.name);
+      if (text != null) files.set(x.filename, text);
     }
-    return { pr: { number: pr.number, url: pr.html_url }, branch: pr.head.ref, files, authors };
+    return { pr: { number: pr.number, url: pr.html_url }, branch: pr.head.ref, files };
   }
 
   async createBranch(t) {

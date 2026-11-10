@@ -380,19 +380,27 @@ export async function mountDeck({ data, model, slug }) {
   }
 
   /* lazily loaded tools */
-  let editor = null, recorder = null, editorLoad = null, recorderLoad = null;
+  let editor = null, recorder = null;
+  const toolMsg = h('div', { id: 'tool-msg', role: 'status', hidden: true });
+  document.body.append(toolMsg);
+  // Each tool is created once, also when asked for again while its module
+  // loads; a failed load says so and is tried again on the next call.
+  const lazyTool = (name, create) => {
+    let load = null;
+    return () => (load ||= create().then(
+      tool => { toolMsg.hidden = true; return tool; },
+      e => { load = null; toolMsg.textContent = `Could not load the ${name}: ${e.message}. Check your connection and try again.`; toolMsg.hidden = false; return null; }));
+  };
+  const editorTool = lazyTool('editor', async () => (editor = (await import('./editor.js')).createEditor(api)));
+  const recorderTool = lazyTool('recorder', async () => (recorder = (await import('./recorder.js')).createRecorder(api)));
   async function openEditor(opts = {}) {
-    if (root.dataset.recording) return;
-    editorLoad ||= import('./editor.js').then(m => (editor = m.createEditor(api)));
-    (await editorLoad).open(opts);
-  }
-  function recorderTool() {
-    recorderLoad ||= import('./recorder.js').then(m => (recorder = m.createRecorder(api)));
-    return recorderLoad;
+    const tool = await editorTool();
+    if (tool && !root.dataset.recording) tool.open(opts);
   }
   async function toggleRecord() {
     if (editor && editor.isOpen() && !root.dataset.recording) editor.close();
-    (await recorderTool()).toggle();
+    const tool = await recorderTool();
+    if (tool) tool.toggle();
   }
 
 
