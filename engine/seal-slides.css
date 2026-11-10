@@ -391,6 +391,7 @@ body {
   color: var(--ink); background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; padding: 10px;
   tab-size: 2;
 }
+#editor textarea[readonly] { opacity: .7; }
 #editor textarea:focus-visible, #editor input:focus-visible { outline: 2px solid var(--now); outline-offset: 1px; }
 #editor .hint { color: var(--ink-2); font-size: 12.5px; margin: 0; line-height: 1.45; }
 #editor .hint.over { color: var(--warn); }

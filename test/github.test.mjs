@@ -117,6 +117,7 @@ test('saveEdit reuses the viewer\'s open pull request and checks for conflicts',
     ['GET', /^\/user$/, () => ({ login: 'octo' })],
     ['GET', /^\/repos\/acme\/decks$/, () => ({ default_branch: 'main', permissions: { push: true } })],
     ['GET', /^\/repos\/acme\/decks\/pulls\?state=open/, () => [other, pull]],
+    ['GET', /^\/repos\/acme\/decks\/pulls\/3\/files/, () => [{ filename: 'decks/example/slides/02.md', status: 'modified' }]],
     ['GET', /^\/repos\/acme\/decks\/contents\/decks\/example\/slides\/02\.md\?ref=/, m => ({ content: b64('old text') })],
     ...commitRoutes('acme', 'decks', branch, 'branch-head'),
   ]);
@@ -134,6 +135,7 @@ test('saveEdit refuses to overwrite a file that changed on the branch', async ()
     ['GET', /^\/user$/, () => ({ login: 'octo' })],
     ['GET', /^\/repos\/acme\/decks$/, () => ({ default_branch: 'main', permissions: { push: true } })],
     ['GET', /^\/repos\/acme\/decks\/pulls\?state=open/, () => [pull]],
+    ['GET', /^\/repos\/acme\/decks\/pulls\/3\/files/, () => [{ filename: 'decks/example/slides/02.md', status: 'modified' }]],
     ['GET', /\/contents\//, () => ({ content: b64('someone else changed this') })],
   ]);
   await assert.rejects(store(gh).saveEdit({ files: [{ path: 'decks/example/slides/02.md', content: 'mine', base: 'old' }], message: 'Edit' }), ConflictError);
@@ -146,6 +148,7 @@ test('a conflict names the pull request that holds the newer version', async () 
     ['GET', /^\/user$/, () => ({ login: 'octo' })],
     ['GET', /^\/repos\/acme\/decks$/, () => ({ default_branch: 'main', permissions: { push: true } })],
     ['GET', /^\/repos\/acme\/decks\/pulls\?state=open/, () => [pull]],
+    ['GET', /^\/repos\/acme\/decks\/pulls\/3\/files/, () => [{ filename: 'decks/example/slides/02.md', status: 'modified' }]],
     ['GET', /\/contents\//, () => ({ content: b64('changed since') })],
   ]);
   await assert.rejects(store(gh).saveEdit({ files: [{ path: 'decks/example/slides/02.md', content: 'mine', base: 'old' }], message: 'Edit' }), e =>
@@ -193,6 +196,26 @@ test('a second edit builds on the viewer\'s open pull request, not on the page a
   assert.deepEqual(tree.tree, [{ path, mode: '100644', type: 'blob', content: 'T2' }]);
 });
 
+test('a file the pull request does not change is saved although the branch holds an older text of it', async () => {
+  const branch = 'seal-slides/example/octo-1';
+  const path = 'decks/example/slides/02.md';
+  const pull = { number: 3, html_url: 'https://github.com/acme/decks/pull/3', user: { login: 'octo' }, head: { ref: branch, repo: { full_name: 'acme/decks' } }, base: { ref: 'main' } };
+  let tree;
+  const gh = fakeGitHub([
+    ['GET', /^\/user$/, () => ({ login: 'octo' })],
+    ['GET', /^\/repos\/acme\/decks$/, () => ({ default_branch: 'main', permissions: { push: true } })],
+    ['GET', /^\/repos\/acme\/decks\/pulls\?state=open/, () => [pull]],
+    ['GET', /^\/repos\/acme\/decks\/pulls\/3\/files/, () => [{ filename: 'decks/example/comments/20261101-090000Z-octo.md', status: 'added' }]],
+    ['GET', /\/contents\//, () => ({ content: b64('as the branch was cut') })],
+    ['POST', /^\/repos\/acme\/decks\/git\/trees$/, (_, body) => { tree = body; return R(201, { sha: 'new-tree' }); }],
+    ...commitRoutes('acme', 'decks', branch, 'branch-head'),
+  ]);
+  const r = await store(gh).saveEdit({ files: [{ path, content: 'edited from main', base: 'merged into main since' }], message: 'Edit' });
+  assert.equal(r.pr.number, 3);
+  assert.equal(r.createdPr, false);
+  assert.deepEqual(tree.tree, [{ path, mode: '100644', type: 'blob', content: 'edited from main' }]);
+});
+
 test('pending is null without an open pull request of the viewer\'s, and does not fork', async () => {
   const others = { number: 4, html_url: 'u', user: { login: 'someone' }, head: { ref: 'seal-slides/example/someone-1', repo: { full_name: 'acme/decks' } }, base: { ref: 'main' } };
   const gh = fakeGitHub([
@@ -231,6 +254,7 @@ test('on a pull-request preview, saveEdit commits to that pull request\'s branch
     ['GET', /^\/user$/, () => ({ login: 'octo' })],
     ['GET', /^\/repos\/acme\/decks$/, () => ({ default_branch: 'main', permissions: { push: true } })],
     ['GET', /^\/repos\/acme\/decks\/pulls\/12$/, () => pull],
+    ['GET', /^\/repos\/acme\/decks\/pulls\/12\/files/, () => [{ filename: 'decks/example/slides/02.md', status: 'modified' }]],
     ['GET', /\/contents\//, () => ({ content: b64('old') })],
     ...commitRoutes('acme', 'decks', 'feature/deck', 'built-sha'),
   ]);

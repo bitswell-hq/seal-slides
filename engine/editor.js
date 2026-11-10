@@ -40,6 +40,8 @@ export function createEditor(deck) {
   let isOpen = false;
   // One request that writes to GitHub, or reads what the next one builds on, at a time.
   let busy = false;
+  // The viewer's open pull request is being read; nothing is typed until it has been.
+  let loading = false;
   // The viewer's open pull request and the files it holds that are not loaded yet.
   let mine = null;
   // The file the slide textareas hold.
@@ -109,7 +111,7 @@ export function createEditor(deck) {
   const signInMsg = h('p', { class: 'hint', 'aria-live': 'polite' });
   const repoName = repo ? `${repo.owner}/${repo.name}` : null;
   const signIn = h('div', { class: 'signin' },
-    h('p', { class: 'hint' }, 'Sign in to save. Paste a ', h('a', { href: 'https://github.com/settings/personal-access-tokens/new', target: '_blank', rel: 'noopener', text: 'fine-grained token' }),
+    h('p', { class: 'hint' }, 'Sign in to edit. Paste a ', h('a', { href: 'https://github.com/settings/personal-access-tokens/new', target: '_blank', rel: 'noopener', text: 'fine-grained token' }),
       ` with read and write access to Contents and Pull requests${repoName ? ' on ' + repoName : ''}. Without push access${repoName ? ' to ' + repoName : ''}, paste a `,
       h('a', { href: 'https://github.com/settings/tokens/new', target: '_blank', rel: 'noopener', text: 'classic token' }),
       ' with the public_repo scope instead; your edits go through your fork. The token stays in this tab only and is sent only to api.github.com.'),
@@ -203,6 +205,8 @@ export function createEditor(deck) {
       else pendingNote.append('Your open ', pr, ' is where saves go.');
       if (waiting.length) pendingNote.append(` It holds a newer ${names(waiting.map(f => f.path))}; discard your changes to load it.`);
     }
+    const locked = !!repo && (!login || loading);
+    for (const t of [srcTa, scriptTa, sourcesTa, drawTa]) t.readOnly = locked;
     signIn.hidden = !repo || !!login;
     whoRow.hidden = !login;
     who.textContent = login ? `Signed in as ${login}` : '';
@@ -265,10 +269,11 @@ export function createEditor(deck) {
         const text = await res.text();
         f = files.get(path);
         if (!f) {
-          f = { path, base: text, text, kind: 'draw', draw: s.draw };
+          f = { path, base: text, text, built: text, kind: 'draw', draw: s.draw };
           files.set(path, f);
           adopt(f);
           syncFooter();
+          if (f.text !== text) await redraw(f);
         }
       } catch (e) {
         drawErr.textContent = `Could not load ${s.draw}: ${e.message}`;
@@ -281,15 +286,20 @@ export function createEditor(deck) {
     const f = files.get(drawTa.dataset.path);
     if (f) { f.text = drawTa.value; syncFooter(); }
   });
-  async function applyDrawing() {
-    const f = files.get(drawTa.dataset.path);
-    if (!f) return;
-    const url = URL.createObjectURL(new Blob([f.text], { type: 'text/javascript' }));
+  // Draw the slides of a drawing module from its text in the editor: the
+  // published module when the text is the built one, otherwise the text itself.
+  async function redraw(f) {
+    const edited = f.text !== f.built;
+    const url = edited ? URL.createObjectURL(new Blob([f.text], { type: 'text/javascript' })) : new URL(f.draw, location.href).href;
     const mod = await loadDrawModule(url);
-    URL.revokeObjectURL(url);
+    if (edited) URL.revokeObjectURL(url);
     if (mod.error) { drawErr.textContent = mod.error; return; }
     drawErr.textContent = '';
     deck.model.slides.forEach((s, i) => { if (s.draw === f.draw) deck.replaceSlide(i, s, mod); });
+  }
+  function applyDrawing() {
+    const f = files.get(drawTa.dataset.path);
+    if (f) redraw(f);
   }
   applyBtn.addEventListener('click', applyDrawing);
   drawTa.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); applyDrawing(); } });
@@ -321,7 +331,7 @@ export function createEditor(deck) {
   }
   async function loadPending() {
     if (busy) return;
-    busy = true;
+    busy = loading = true;
     syncFooter();
     syncComposer();
     const t = token;
@@ -337,12 +347,13 @@ export function createEditor(deck) {
         if (f.text === was) continue;
         took = true;
         if (f.kind === 'slide') preview(f.index, f);
+        else await redraw(f);
       }
       if (took && isOpen) refill();
     } catch (e) {
       saveResult.textContent = `Could not check for your open pull request: ${e.message}`;
     } finally {
-      busy = false;
+      busy = loading = false;
       syncFooter();
       syncComposer();
     }
@@ -399,8 +410,15 @@ export function createEditor(deck) {
     } catch (e) {
       conflict = e instanceof ConflictError;
       saveResult.textContent = '';
-      if (conflict) saveResult.append(`Not saved: ${e.path.split('/').pop()} changed in `, link(e.pr.url, `pull request #${e.pr.number}`), ' since the editor loaded it.');
-      else saveResult.append(`Not saved: ${e.message}`);
+      if (conflict) {
+        const yours = files.get(e.path).text;
+        const copyBtn = h('button', { class: 'act', type: 'button', text: 'Copy my text' });
+        copyBtn.addEventListener('click', async () => {
+          try { await navigator.clipboard.writeText(yours); copyBtn.textContent = 'Copied'; } catch (_) { copyBtn.textContent = 'Could not copy; select it in the editor'; }
+        });
+        saveResult.append(`Not saved: ${e.path.split('/').pop()} changed in `, link(e.pr.url, `pull request #${e.pr.number}`),
+          ' since the editor loaded it. Copy your text, then discard your changes to load the newer version. ', copyBtn);
+      } else saveResult.append(`Not saved: ${e.message}`);
     } finally {
       busy = false;
       syncFooter();
@@ -414,14 +432,9 @@ export function createEditor(deck) {
       f.text = f.base;
       adopt(f);
       if (f.kind === 'slide') preview(f.index, f);
-      else if (f.kind === 'draw') {
-        // The module as published: edits were imported from blob URLs, so this is the original.
-        const mod = await loadDrawModule(new URL(f.draw, location.href).href);
-        deck.model.slides.forEach((s, i) => { if (s.draw === f.draw) deck.replaceSlide(i, s, mod); });
-      }
+      else await redraw(f);
     }
     refill();
-    drawErr.textContent = '';
   });
   panel.addEventListener('keydown', e => {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); }
@@ -558,7 +571,7 @@ export function createEditor(deck) {
     const u = new URL(location.href);
     u.searchParams.set('edit', '1');
     history.replaceState(null, '', u);
-    (opts.tab === 'comments' ? tabBtns.comments : srcTa).focus({ preventScroll: true });
+    (opts.tab === 'comments' ? tabBtns.comments : repo && !token ? tokenIn : srcTa).focus({ preventScroll: true });
   }
   function close() {
     isOpen = false;

@@ -91,6 +91,14 @@ async function openDeck(hash = '#1', opts = {}) {
 
 const count = page => page.locator('#count').textContent();
 
+// Edit mode asks for a token first; its text boxes open once the viewer's pull request has been read.
+async function signIn(page) {
+  await page.locator('#ed-token').fill('github_pat_' + 'x'.repeat(30));
+  await page.locator('#editor .signin button').click();
+  await page.locator('#editor footer').getByText('Signed in as octo').waitFor();
+  await page.waitForFunction(() => !document.querySelector('#ed-source').readOnly);
+}
+
 test('navigation: keys, hash, marks, notes, sources and theme', async () => {
   const { page, context, errors } = await openDeck('#1');
   assert.equal(await count(page), '1 / 7');
@@ -169,6 +177,13 @@ test('edit mode: live preview, script edits, saving and a line comment', async (
   const src = page.locator('#ed-source');
   assert.match(await src.inputValue(), /^---\ntitle: A slide is a Markdown file/);
 
+  // Nothing can be typed before signing in, with a token kept in sessionStorage only.
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'ed-token');
+  assert.deepEqual(await page.evaluate(() => ['ed-source', 'ed-script', 'ed-sources', 'ed-drawing'].map(id => document.getElementById(id).readOnly)), [true, true, true, true]);
+  await signIn(page);
+  assert.equal(await page.evaluate(() => localStorage.length), 0);
+  assert.ok(await page.evaluate(() => sessionStorage.getItem('seal-slides:github-token')));
+
   // Live preview of the Markdown.
   await src.fill((await src.inputValue()).replace('title: A slide is a Markdown file', 'title: Edited in the browser'));
   await page.waitForFunction(() => document.querySelector('.slide.active h2').textContent === 'Edited in the browser');
@@ -191,12 +206,6 @@ test('edit mode: live preview, script edits, saving and a line comment', async (
   await page.locator('#tab-source').click();
   assert.match(await src.inputValue(), /sources:\n {2}- "One source"\n {2}- "\[Two\]\(https:\/\/example\.org\)"\n---/);
 
-  // Sign in with a token kept in sessionStorage only, then save.
-  await page.locator('#ed-token').fill('github_pat_' + 'x'.repeat(30));
-  await page.locator('#editor .signin button').click();
-  await page.locator('#editor footer').getByText('Signed in as octo').waitFor();
-  assert.equal(await page.evaluate(() => localStorage.length), 0);
-  assert.ok(await page.evaluate(() => sessionStorage.getItem('seal-slides:github-token')));
   await page.locator('#ed-message').fill('Retitle slide 3');
   await page.locator('#editor footer button', { hasText: 'Save to GitHub' }).click();
   await page.locator('#editor footer .result a', { hasText: 'pull request #7' }).waitFor();
@@ -243,6 +252,7 @@ test('edit mode: a slide change while typing gives the editor the new slide\'s t
   await page.keyboard.press('e');
   await page.locator('#editor').waitFor();
   const src = page.locator('#ed-source');
+  await signIn(page);
   await src.fill((await src.inputValue()).replace('title: A slide is a Markdown file', 'title: Slide three, edited'));
   await page.evaluate(() => { location.hash = '#4'; });
   await page.waitForFunction(() => document.querySelector('#count').textContent === '4 / 7');
@@ -272,8 +282,7 @@ test('edit mode: signing in loads the viewer\'s open pull request, and the next 
   state.prFiles = [{ filename: file, status: 'modified' }];
   state.contents[file] = first;
 
-  await page.locator('#ed-token').fill('github_pat_' + 'x'.repeat(30));
-  await page.locator('#editor .signin button').click();
+  await signIn(page);
   await page.locator('#editor footer .hint a', { hasText: 'pull request #7' }).waitFor();
   assert.equal(await src.inputValue(), first);
   await page.waitForFunction(() => document.querySelector('.slide.active h2').textContent === 'Saved earlier');
@@ -285,6 +294,25 @@ test('edit mode: signing in loads the viewer\'s open pull request, and the next 
   assert.match(await page.locator('#editor footer .result').textContent(), /added to pull request #7/);
   assert.match(state.tree.tree[0].content, /title: Saved twice/);
   assert.ok(!state.calls.some(c => c.m === 'POST' && c.p === '/repos/acme/decks/pulls'), 'no second pull request');
+
+  // The pull request changes under the viewer: nothing is saved, their text can be copied, and discarding loads the newer version.
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  const theirs = first.replace('title: Saved earlier', 'title: Changed elsewhere');
+  const yours = first.replace('title: Saved earlier', 'title: Typed meanwhile');
+  state.contents[file] = theirs;
+  state.tree = null;
+  await src.fill(yours);
+  await page.locator('#editor footer button', { hasText: 'Save to GitHub' }).click();
+  await page.locator('#editor footer .result button', { hasText: 'Copy my text' }).click();
+  await page.locator('#editor footer .result button', { hasText: 'Copied' }).waitFor();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), yours);
+  assert.match(await page.locator('#editor footer .result').textContent(), /03-markdown\.md changed in pull request #7 since the editor loaded it/);
+  assert.equal(state.tree, null, 'nothing was committed');
+  assert.equal(await src.inputValue(), yours);
+  await page.locator('#editor footer').getByText('holds a newer 03-markdown.md').waitFor();
+  await page.locator('#editor footer button', { hasText: 'Discard changes' }).click();
+  await page.waitForFunction(() => document.querySelector('.slide.active h2').textContent === 'Changed elsewhere');
+  assert.equal(await src.inputValue(), theirs);
   assert.deepEqual(errors, []);
   await context.close();
 });

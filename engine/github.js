@@ -253,15 +253,17 @@ export class DeckStore {
   }
 
   // files: [{ path, content, base }] where base is the text the editor loaded
-  // (see pending); a file that changed on the branch since then is a conflict.
+  // (see pending); a file the pull request changes that differs from it on
+  // the branch is a conflict.
   async saveEdit({ files, message, body }) {
     if (!files.length) throw new Error('nothing to save');
     const t = await this.target();
     if (t.create) {
       await this.createBranch(t);
-    } else {
+    } else if (files.some(f => f.base != null)) {
+      const inPull = new Set((await this.client.get(`${this.base}/pulls/${t.pr.number}/files?per_page=100`)).map(x => x.filename));
       for (const f of files) {
-        if (f.base == null) continue;
+        if (f.base == null || !inPull.has(f.path)) continue;
         const now = await this.readFile(t.owner, t.name, f.path, t.branch);
         if (now != null && now !== f.base && now !== f.content) throw new ConflictError(f.path, t.branch, { number: t.pr.number, url: t.pr.html_url });
       }
