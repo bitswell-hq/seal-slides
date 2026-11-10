@@ -87,7 +87,7 @@ Relative links and image paths resolve against the deck folder (where the page i
 
 Slide text is treated as text that may come from someone else's pull request, so the engine cleans the HTML of a slide body, a script line and a source before it reaches the page. Scripts never run from it:
 
-- `<iframe>` is kept but sandboxed (`allow-scripts allow-popups allow-presentation`, without `allow-same-origin`) and loses `srcdoc`, so an embed runs in an origin of its own and cannot reach the deck page. An embed that needs its own site's cookies or storage will not work.
+- `<iframe>` is kept but sandboxed (`allow-scripts allow-popups allow-presentation`, without `allow-same-origin`) and loses `srcdoc`, so an embed runs in an origin of its own and cannot reach the deck page. It also loses `allow`, `allowfullscreen` and `allowpaymentrequest`, so no permission the page holds (the recorder's microphone) is passed on to a frame. An embed that needs its own site's cookies or storage, a delegated permission or full screen will not work.
 - `<script>`, `<object>`, `<embed>`, `<applet>`, `<frame>`, `<frameset>`, `<portal>`, `<fencedframe>`, `<base>`, `<meta>`, `<link>`, `<form>` and `<template>` are removed, as are SVG animations of a link's `href`.
 - `on…` handler attributes are removed. `href`, `src`, `action`, `formaction`, `poster`, `data`, `background` and `ping` are removed unless they are `http:`, `https:` or `mailto:` URLs (relative paths count as these); images and media may also use `data:` and `blob:`.
 - Every link gets `rel="noopener noreferrer"`, and a link with a `target` opens in a new tab, so a page it opens holds no handle on the deck.

@@ -432,6 +432,7 @@ test('deck HTML cannot run script in the page or get a handle on its window', as
     const html = [
       '<iframe id="f" name="top2" src="/other/x.html" srcdoc="<script src=/other/x.js></script>" onload="x()"></iframe>',
       '<iframe id="g" src="javascript:alert(1)" sandbox="allow-scripts allow-same-origin"></iframe>',
+      '<iframe id="perm" src="https://example.org/x.html" allow="microphone; camera; display-capture" allowfullscreen allowpaymentrequest></iframe>',
       '<object data="/other/x.html"></object><embed src="/other/x.svg"><script src="/other/x.js"></script>',
       '<base href="/other/"><meta http-equiv="refresh" content="0;url=/other/"><link rel="stylesheet" href="/other/x.css">',
       '<form action="/other/"><button id="inform" formaction="/other/">go</button></form><template><p id="tpl">t</p></template>',
@@ -451,7 +452,7 @@ test('deck HTML cannot run script in the page or get a handle on its window', as
       dropped: div.querySelectorAll('object, embed, script, base, meta, link, form, template, set, #inform, #tpl').length,
       animates: Array.from(div.querySelectorAll('animate'), e => e.id),
       handlers: Array.from(div.querySelectorAll('*')).flatMap(e => e.getAttributeNames().filter(n => /^on|^srcdoc$|^formaction$/i.test(n))),
-      f: at('f', 'sandbox', 'src', 'name'), g: at('g', 'sandbox', 'src'), fo: at('fo', 'sandbox'),
+      f: at('f', 'sandbox', 'src', 'name'), perm: at('perm', 'sandbox', 'src', 'allow', 'allowfullscreen', 'allowpaymentrequest'), g: at('g', 'sandbox', 'src'), fo: at('fo', 'sandbox'),
       js: at('js', 'href'), tab: at('tab', 'href'), data: at('data', 'href'), sa: at('sa', 'xlink:href'),
       named: at('named', 'href', 'target', 'rel'), plain: at('plain', 'href', 'target', 'rel'), rel: at('rel', 'href'), mail: at('mail', 'href'),
       img: at('img', 'src', 'name'), img2: at('img2', 'src', 'alt'), u1: at('u1', 'href'), u2: at('u2', 'href'),
@@ -468,6 +469,7 @@ test('deck HTML cannot run script in the page or get a handle on its window', as
   assert.deepEqual(got.handlers, []);
   assert.deepEqual(got.f, [SANDBOX, '/other/x.html', null]);
   assert.deepEqual(got.g, [SANDBOX, null]);
+  assert.deepEqual(got.perm, [SANDBOX, 'https://example.org/x.html', null, null, null], 'no permission of the page is delegated to a frame');
   assert.deepEqual(got.fo, [SANDBOX]);
   assert.deepEqual([got.js, got.tab, got.data, got.sa], [[null], [null], [null], [null]]);
   assert.deepEqual(got.named, ['/other/x.html', '_blank', 'noopener noreferrer']);

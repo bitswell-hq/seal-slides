@@ -86,7 +86,10 @@ export function deckHtml(html) {
       if (name.startsWith('on') || name === 'srcdoc') el.removeAttribute(a.name);
       else if (URL_ATTRS.has(name.replace(/^xlink:/, '')) && !safeUrl(a.value, MEDIA.has(tag))) el.removeAttribute(a.name);
     }
-    if (tag === 'iframe') el.setAttribute('sandbox', FRAME_SANDBOX);
+    if (tag === 'iframe') {
+      el.setAttribute('sandbox', FRAME_SANDBOX);
+      for (const name of ['allow', 'allowfullscreen', 'allowpaymentrequest']) el.removeAttribute(name);
+    }
     if (tag === 'iframe' || tag === 'img') el.removeAttribute('name');
     if (tag === 'a' || tag === 'area') {
       el.setAttribute('rel', 'noopener noreferrer');
