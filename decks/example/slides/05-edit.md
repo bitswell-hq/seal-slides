@@ -6,7 +6,7 @@ notes: |
   Press E and the deck opens its editor beside the slide.
   Change the Markdown and the slide redraws as you type.
   Select any text, on the slide or in the source, and leave a comment.
-  Saving signs in with your own GitHub token.
+  Editing signs in with your own GitHub token.
   An edit becomes a commit on a branch, with a pull request.
   A comment lands on that pull request, on the line you selected.
 sources:
