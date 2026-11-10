@@ -19,6 +19,18 @@ export const VW = 1920, VH = 1080;
 // avc3 keeps codec settings in-band, which Chrome asks for; Safari offers avc1.
 export const MIMES = ['video/mp4;codecs=avc3.640028,mp4a.40.2', 'video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4',
   'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+// The format a MediaRecorder MIME type names, such as "MP4 (H.264 and Opus)"
+// for video/mp4;codecs=avc1.42000c,opus. Only codecs the type lists are named:
+// the same container holds AAC audio in one browser and Opus in another.
+export function formatLabel(mime) {
+  const m = String(mime || '').toLowerCase();
+  const container = /mp4/.test(m.split(';')[0]) ? 'MP4' : 'WebM';
+  const codecs = (/codecs=["']?([^"';]+)/.exec(m) || [null, ''])[1];
+  const video = /avc[13]|h264/.test(codecs) ? 'H.264' : /av01/.test(codecs) ? 'AV1' : /vp0?9/.test(codecs) ? 'VP9' : /vp0?8/.test(codecs) ? 'VP8' : '';
+  const audio = /mp4a|aac/.test(codecs) ? 'AAC' : /opus/.test(codecs) ? 'Opus' : '';
+  const named = [video, audio].filter(Boolean);
+  return named.length ? `${container} (${named.join(' and ')})` : container;
+}
 export const pickMime = (ok = m => MediaRecorder.isTypeSupported(m)) => MIMES.find(m => { try { return ok(m); } catch (_) { return false; } }) || '';
 
 const NS = 'http://www.w3.org/2000/svg';
@@ -468,7 +480,7 @@ export function createRecorder(deck) {
     let blob = new Blob(chunks, { type });
     if (/webm/.test(type)) try { blob = await webmDuration(blob, secs * 1000); } catch (_) { /* keep the file as recorded */ }
     const ext = /mp4/.test(type) ? 'mp4' : 'webm';
-    const fmt = ext === 'mp4' ? 'MP4 (H.264 and AAC)' : 'WebM (' + (/vp9/.test(mime) ? 'VP9' : 'VP8') + ' and Opus)';
+    const fmt = formatLabel(mime);
     const d = new Date(), p2 = n => String(n).padStart(2, '0');
     const name = `${deck.slug}-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}.${ext}`;
     if (R.url) URL.revokeObjectURL(R.url);

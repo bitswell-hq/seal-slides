@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { webmDuration, pickMime, MIMES } from '../engine/recorder.js';
+import { webmDuration, pickMime, formatLabel, MIMES } from '../engine/recorder.js';
 
 // A minimal WebM: EBML header, a Segment of unknown size, Info, then a Cluster.
 function webm({ duration }) {
@@ -49,4 +49,15 @@ test('pickMime prefers MP4 and falls back to WebM', () => {
   assert.equal(pickMime(m => m.startsWith('video/webm')), 'video/webm;codecs=vp9,opus');
   assert.equal(pickMime(m => m === 'video/mp4'), 'video/mp4');
   assert.equal(pickMime(() => { throw new Error('no'); }), '');
+});
+
+test('formatLabel names only the codecs the recorder used', () => {
+  assert.equal(formatLabel('video/mp4;codecs=avc3.640028,mp4a.40.2'), 'MP4 (H.264 and AAC)');
+  assert.equal(formatLabel('video/mp4;codecs=avc1.42000c,opus'), 'MP4 (H.264 and Opus)');
+  assert.equal(formatLabel('video/mp4; codecs="avc1.64001F, mp4a.40.2"'), 'MP4 (H.264 and AAC)');
+  assert.equal(formatLabel('video/webm;codecs=vp9,opus'), 'WebM (VP9 and Opus)');
+  assert.equal(formatLabel('video/webm;codecs=vp8,opus'), 'WebM (VP8 and Opus)');
+  assert.equal(formatLabel('video/webm;codecs=av01,opus'), 'WebM (AV1 and Opus)');
+  assert.equal(formatLabel('video/mp4'), 'MP4', 'no codecs listed, none claimed');
+  assert.equal(formatLabel(''), 'WebM');
 });

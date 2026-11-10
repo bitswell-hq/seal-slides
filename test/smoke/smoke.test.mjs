@@ -610,11 +610,19 @@ test('the recorder saves a 1920×1080 video of the slides with microphone audio'
   assert.ok(detail.seconds > 2.5 && detail.seconds < 6, `paused time is left out (${detail.seconds}s)`);
   const file = await readFile(await d.path());
   assert.equal(file.length, detail.size);
+  const saved = await page.locator('#rec-msg').textContent();
   if (detail.type.startsWith('video/mp4')) {
+    // MP4 holds AAC audio where the browser has an AAC encoder and Opus where it has none (Chromium on Linux).
     assert.equal(file.subarray(4, 8).toString('latin1'), 'ftyp');
-    assert.ok(file.includes('mp4a'), 'an AAC audio track');
-  } else assert.ok(file.includes('A_OPUS'), 'an Opus audio track');
-  assert.match(await page.locator('#rec-msg').textContent(), /Saved example-.*1920×1080.*nothing was uploaded/);
+    const aac = file.includes('mp4a'), opus = file.includes('Opus');
+    assert.ok(aac || opus, 'an AAC or Opus audio track');
+    if (aac) assert.match(saved, /MP4 \(H\.264 and AAC\)/, 'the message names the AAC track');
+    else assert.doesNotMatch(saved, /AAC/, 'the message claims no AAC track the file does not have');
+  } else {
+    assert.ok(file.includes('A_OPUS'), 'an Opus audio track');
+    assert.match(saved, /WebM \(VP[89] and Opus\)/);
+  }
+  assert.match(saved, /Saved example-.*1920×1080.*nothing was uploaded/);
   assert.ok(await page.locator('#rec-panel').isHidden());
   assert.equal(await page.locator('html').getAttribute('data-recording'), null);
 
