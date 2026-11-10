@@ -162,7 +162,11 @@ Swipe in any direction on a touch screen, or tap the right or left of the slide.
 
 ### Signing in
 
-Saving uses the viewer's own GitHub account. Paste a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) with read and write access to **Contents** and **Pull requests** on this repository. The token is kept in this tab's `sessionStorage` only, so it is gone when the tab closes; it is never written to the repository, a cookie or `localStorage`, and it is sent only to `api.github.com`. Someone without push access to the repository needs a token that can fork it (a classic token with `public_repo`); their edits go through their fork.
+Saving uses the viewer's own GitHub account. Paste a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) limited to this one repository, with read and write access to **Contents** and **Pull requests**. That is the recommended token: it can change nothing else.
+
+Someone without push access to the repository needs a token that can fork it and push to the fork: a classic token with the `public_repo` scope. Their edits go through their fork. A classic `public_repo` token can write to all of that person's public repositories, not only this one. Use one only if you accept that, and revoke it when you are done.
+
+The token is kept in the page's memory only and is sent only to `api.github.com`. It is never written to `sessionStorage`, `localStorage`, a cookie or the repository, so you paste it again after a reload. The reason is that browser storage is shared by every page of an origin, and the published site shares its origin (`<organisation>.github.io`) with the pull-request previews and with the organisation's other Pages sites; a stored token could be read by any script on any of them. For the same reason pull-request previews are read-only: a preview runs the pull request's drawing modules before anyone has reviewed them, so it has no sign-in, no edit mode and no saving.
 
 GitHub's device flow would avoid pasting a token, but its endpoints (`github.com/login/device/code` and `github.com/login/oauth/access_token`) do not answer cross-origin requests from a browser, so it needs a server to relay them, and this project runs none.
 
@@ -170,9 +174,10 @@ GitHub's device flow would avoid pasting a token, but its endpoints (`github.com
 
 Save commits every changed file in one commit and opens a pull request:
 
-1. On the published site, the first save creates a branch `seal-slides/<deck>/<login>-<time>` from the commit the page was built from and opens a pull request into the branch the page was built from. Later saves add commits to that branch while its pull request is open.
-2. On a pull-request preview, saves commit to that pull request's branch, when you can push to it.
-3. Without push access, the branch is created in your fork (made on first use) and the pull request comes from it.
+1. The first save creates a branch `seal-slides/<deck>/<login>-<time>` from the commit the page was built from and opens a pull request into the branch the page was built from. Later saves add commits to that branch while its pull request is open.
+2. Without push access, the branch is created in your fork (made on first use) and the pull request comes from it.
+
+Saving happens on the published site only. A pull-request preview saves nothing; to change a pull request, push to its branch.
 
 Edit mode asks you to sign in before the first edit: the editor's text boxes are read-only until you have. Viewing the deck and reading comments need no sign-in. When a pull request of yours from the editor is open, signing in loads that pull request's version of each file it changed, redraws the slides with it and says so with a link, so a second edit builds on the first and not on the page as built.
 
@@ -185,7 +190,7 @@ Select text on the slide, in the script panel or in any of the editor's text box
 - When an open pull request changes that file, the comment becomes a review comment on it: on the selected lines when they are part of the diff, otherwise on the file, quoting the selection and its line numbers. If the pull request holds another version of the file, the quote is found again there to get the right line.
 - Otherwise it becomes a comment file, `decks/<deck>/comments/<time>-<login>.md`, committed and opened as a pull request the same way as an edit. Its front matter records the author, time, file, lines and quoted text; its body is the comment. Comment files are part of the build, so once merged they show on the published deck.
 
-Anyone can read comments without signing in: the comment button in the controls shows how many the current slide has. The published site shows comment files and the review comments of open pull requests on the deck's files; a preview shows its own pull request's review comments. Comments are always shown as plain text.
+Anyone can read comments without signing in: the comment button in the controls shows how many the current slide has. The published site shows comment files and the review comments of open pull requests on the deck's files. A pull-request preview shows the comment files it was built with and its own pull request's review comments, and nothing can be posted from it; comment on the pull request on GitHub instead. Comments are always shown as plain text.
 
 ## Recording a session
 
@@ -202,11 +207,11 @@ The file is MP4 (H.264 and AAC) where the browser's `MediaRecorder` can write it
 
 ## Deploying
 
-`.github/workflows/pages.yml` builds every deck on each push to `main` and publishes `site/` on the `gh-pages` branch. `.github/workflows/preview.yml` publishes each same-repository pull request under `/pr-preview/pr-<number>/` on the same branch, keeps a comment with the link on the pull request, and removes the preview when the pull request closes. Both build without write access and hand the site to a separate job that pushes it.
+`.github/workflows/pages.yml` builds every deck on each push to `main` and publishes `site/` on the `gh-pages` branch. `.github/workflows/preview.yml` publishes each same-repository pull request under `/pr-preview/pr-<number>/` on the same branch as a read-only preview (built with `--pr`), keeps a comment with the link on the pull request, and removes the preview when the pull request closes. Both build without write access and hand the site to a separate job that pushes it.
 
 The repository needs two settings once: Pages serving from the `gh-pages` branch (Settings → Pages → Deploy from a branch), and Actions allowed to write to the repository (Settings → Actions → General → Workflow permissions), which the deploy and preview jobs use to push `gh-pages` and comment.
 
-The build takes the repository the editor saves to from flags or the environment, then from the local git checkout:
+The build takes the repository the editor saves to from flags or the environment, then from the local git checkout. `--pr` (or `SEAL_SLIDES_PR`) makes the build a read-only preview of that pull request:
 
 ```sh
 node scripts/build.mjs [--decks decks] [--out site] [--repo owner/name] [--ref branch] [--sha commit] [--pr number]
@@ -224,11 +229,11 @@ npm run test:smoke                 # headless Chromium
 ```
 
 - `test/loader.test.mjs`: front matter, line maps, ordering, durations, errors with file and line, Markdown rendering with line anchors, front-matter edits that round-trip through YAML, finding a quote in a file.
-- `test/github.test.mjs`: the persistence layer against a mocked GitHub API: new branch and pull request, reusing the viewer's pull request, loading its version of the files, conflicts, previews committing to their pull request's branch, forks (and syncing a fork that lags), line and file review comments, re-finding a quote in a newer file, comment files, and reading comments without a token.
+- `test/github.test.mjs`: the persistence layer against a mocked GitHub API: new branch and pull request, reusing the viewer's pull request, loading its version of the files, conflicts, forks (and syncing a fork that lags), line and file review comments, the viewer's own pull request found among many open ones, re-finding a quote in a newer file, comment files, reading comments without a token, and a preview listing its own pull request's comments.
 - `test/build.test.mjs`: the example deck builds; the page's CSP matches its import map; deck text cannot close the page's script element; a broken deck is reported with file and line and writes nothing.
 - `test/recorder.test.mjs`: the WebM duration fix and the choice of MP4 or WebM.
 - `test/serve.test.mjs`: the dev server serves its folder and nothing beside it.
-- `test/smoke/smoke.test.mjs`: in headless Chromium with fake media devices and a fake GitHub API: navigation, hash, marks, script and sources panels, theme, portrait drawings; read-only comments; edit mode (sign-in before the first edit, live preview, a YAML error, script and sources edits, save, a comment on a selected line, a slide change while typing, loading the viewer's open pull request, and a conflict on one file with its text copied and its newer version loaded while another file's edit is kept); recording with pause (the file is 1920×1080 with an audio track, its frames match the painted slides and hold nothing of the presenter panel), a blocked microphone and a cancelled countdown; and each painted slide against a screenshot of the live slide.
+- `test/smoke/smoke.test.mjs`: in headless Chromium with fake media devices and a fake GitHub API: navigation, hash, marks, script and sources panels, theme, portrait drawings; read-only comments; a pull-request preview with its comments and no edit mode or sign-in; edit mode (sign-in before the first edit with the token stored nowhere, live preview, a YAML error, script and sources edits, save, a comment on a selected line, a slide change while typing, loading the viewer's open pull request, redrawing a drawing it changed, and a conflict on one file with its text copied and its newer version loaded while another file's edit is kept); recording with pause (the file is 1920×1080 with an audio track, its frames match the painted slides and hold nothing of the presenter panel), a blocked microphone and a cancelled countdown; and each painted slide against a screenshot of the live slide.
 
 Verified by hand for this version: the example deck's slides in light theme at 1440×900 and in portrait, edit mode and a recording in headless Chromium 156, viewed as screenshots. Not verified: Safari and Firefox, a real microphone, signing in with a real token against github.com, and the Pages and preview workflows (they run once this repository's settings above are in place).
 

@@ -1,19 +1,21 @@
-// The viewer's GitHub token lives in this tab's sessionStorage only: it is
-// gone when the tab closes, is never written to localStorage, a cookie or the
-// repository, and is sent only to api.github.com.
+// The viewer's GitHub token lives in this page's memory only: it is gone on
+// reload, is never written to sessionStorage, localStorage, a cookie or the
+// repository, and is sent only to api.github.com. Storage is shared by every
+// page of the origin (pull-request previews, other Pages sites of the
+// organisation), so nothing is kept there.
 
-const KEY = 'seal-slides:github-token';
+let token = null;
 
 export function loadToken() {
-  try { return sessionStorage.getItem(KEY) || null; } catch (_) { return null; }
+  return token;
 }
 
-export function saveToken(token) {
-  try { sessionStorage.setItem(KEY, token); } catch (_) { /* storage unavailable: the token lasts until reload */ }
+export function saveToken(t) {
+  token = t;
 }
 
 export function clearToken() {
-  try { sessionStorage.removeItem(KEY); } catch (_) { /* storage unavailable */ }
+  token = null;
 }
 
 // A pasted token, trimmed; null when it cannot be a GitHub token.

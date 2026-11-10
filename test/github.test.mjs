@@ -248,22 +248,6 @@ test('without push access, pending and saveEdit use the pull request\'s fork bra
   assert.ok(!gh.paths().some(x => x.includes('/forks')), 'the fork already holds the branch');
 });
 
-test('on a pull-request preview, saveEdit commits to that pull request\'s branch', async () => {
-  const pull = { number: 12, state: 'open', html_url: 'https://github.com/acme/decks/pull/12', head: { ref: 'feature/deck', sha: 'built-sha', repo: { full_name: 'acme/decks' } } };
-  const gh = fakeGitHub([
-    ['GET', /^\/user$/, () => ({ login: 'octo' })],
-    ['GET', /^\/repos\/acme\/decks$/, () => ({ default_branch: 'main', permissions: { push: true } })],
-    ['GET', /^\/repos\/acme\/decks\/pulls\/12$/, () => pull],
-    ['GET', /^\/repos\/acme\/decks\/pulls\/12\/files/, () => [{ filename: 'decks/example/slides/02.md', status: 'modified' }]],
-    ['GET', /\/contents\//, () => ({ content: b64('old') })],
-    ...commitRoutes('acme', 'decks', 'feature/deck', 'built-sha'),
-  ]);
-  const r = await store(gh, { ...REPO, ref: 'feature/deck', pr: 12 }).saveEdit({ files: [{ path: 'decks/example/slides/02.md', content: 'new', base: 'old' }], message: 'Edit' });
-  assert.equal(r.branch, 'feature/deck');
-  assert.equal(r.pr.number, 12);
-  assert.equal(r.createdPr, false);
-});
-
 test('without push access, saveEdit forks, branches in the fork and opens a cross-repository pull request', async () => {
   const branch = 'seal-slides/example/octo-20261109-123456Z';
   let forked = false;
@@ -353,6 +337,23 @@ test('saveComment finds the quote again when the pull request has another versio
   assert.equal(r.kind, 'review-line');
   assert.equal(gh.calls.at(-1).body.line, 5, 'line 3 as built is line 5 in the pull request');
   assert.equal(gh.calls.at(-1).body.commit_id, 'pr-head');
+});
+
+test('saveComment finds the viewer\'s own pull request among many open ones', async () => {
+  const file = 'decks/example/slides/02.md';
+  const others = Array.from({ length: 11 }, (_, i) => ({ number: 20 + i, html_url: 'u', user: { login: 'someone' }, head: { ref: `feature-${i}`, sha: 'built-sha', repo: { name: 'decks', owner: { login: 'acme' } } } }));
+  const own = { number: 5, html_url: 'https://github.com/acme/decks/pull/5', user: { login: 'octo' }, head: { ref: 'seal-slides/example/octo-1', sha: 'built-sha', repo: { name: 'decks', owner: { login: 'acme' } } } };
+  const gh = fakeGitHub([
+    ['GET', /^\/user$/, () => ({ login: 'octo' })],
+    ['GET', /^\/repos\/acme\/decks\/pulls\?state=open/, () => [...others, own]],
+    ['GET', /^\/repos\/acme\/decks\/pulls\/5\/files/, () => [{ filename: file, status: 'modified', patch: PATCH }]],
+    ['GET', /^\/repos\/acme\/decks\/pulls\/\d+\/files/, () => [{ filename: 'README.md', status: 'modified', patch: '' }]],
+    ['POST', /^\/repos\/acme\/decks\/pulls\/5\/comments$/, (_, body) => R(201, { id: 4, ...body, user: { login: 'octo' }, pull_request_url: '/pulls/5' })],
+  ]);
+  const r = await store(gh).saveComment({ anchor: { file, line: 11, endLine: 11, quote: 'new line 11' }, body: 'On my own pull request.' });
+  assert.equal(r.kind, 'review-line');
+  assert.equal(r.pr.number, 5);
+  assert.ok(gh.paths().filter(p => /\/pulls\/\d+\/files/.test(p)).length <= 10, 'at most ten pull requests have their files read');
 });
 
 test('saveComment commits a comment file, with a pull request, when no open pull request changes the file', async () => {

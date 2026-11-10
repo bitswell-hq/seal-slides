@@ -1,10 +1,11 @@
 // Edit mode: the deck beside a panel that edits the current slide's Markdown
 // (with the slide redrawn as you type), its spoken script, its sources and
 // its drawing module, and that lists and posts comments. Saving goes through
-// the GitHub persistence layer with the viewer's own token.
+// the GitHub persistence layer with the viewer's own token. On a pull-request
+// preview the panel only lists the slide's comments.
 
 import { parseSlide, setField, locate, linesOfRange, formatDuration, speakingSeconds } from './loader.js';
-import { GitHubClient, DeckStore, ConflictError } from './github.js';
+import { GitHubClient, DeckStore, GitHubError, ConflictError } from './github.js';
 import { loadToken, saveToken, clearToken, cleanToken } from './auth.js';
 import { h, icon, loadDrawModule } from './runtime.js';
 
@@ -25,6 +26,7 @@ export function createEditor(deck) {
   const data = deck.data;
   const repo = data.repo;
   const deckDir = data.deck.dir;
+  const readOnly = deck.readOnly;
   const wasStill = root.classList.contains('still');
 
   // Every file this session can change, by repository path.
@@ -33,7 +35,6 @@ export function createEditor(deck) {
   const drawPath = s => (s.draw ? `${deckDir}/${s.draw}` : null);
   const changed = () => [...files.values()].filter(f => f.text !== f.base);
 
-  let token = loadToken();
   let login = null;
   let tab = 'source';
   let anchor = null;
@@ -51,7 +52,8 @@ export function createEditor(deck) {
 
   /* ---------- panel ---------- */
   const fileLabel = h('span', { class: 'file' });
-  const closeBtn = h('button', { class: 'btn', type: 'button', 'aria-label': 'Close the editor (E)', title: 'Close the editor (E)' }, icon('close'));
+  const closeLabel = readOnly ? 'Close the comments' : 'Close the editor (E)';
+  const closeBtn = h('button', { class: 'btn', type: 'button', 'aria-label': closeLabel, title: closeLabel }, icon('close'));
   const tabBtns = {};
   const panels = {};
   const tablist = h('div', { role: 'tablist', 'aria-label': 'Editor' });
@@ -102,8 +104,8 @@ export function createEditor(deck) {
   const wholeBtn = h('button', { class: 'act', type: 'button', text: 'Comment on the whole slide' });
   const commentResult = h('p', { class: 'result', 'aria-live': 'polite' });
   const composer = h('div', { class: 'composer' }, anchorLabel, commentTa, h('div', { class: 'row' }, postBtn, wholeBtn), commentResult);
-  panels.comments = h('section', { role: 'tabpanel', id: 'panel-comments', 'aria-labelledby': 'tab-comments', class: 'list' }, commentList, composer,
-    h('p', { class: 'hint', text: 'A comment on a file an open pull request changes is posted there as a review comment. Otherwise it is committed as a file under the deck\'s comments/ folder, with a pull request.' }));
+  panels.comments = h('section', { role: 'tabpanel', id: 'panel-comments', 'aria-labelledby': 'tab-comments', class: 'list' }, commentList, readOnly ? null : [composer,
+    h('p', { class: 'hint', text: 'A comment on a file an open pull request changes is posted there as a review comment. Otherwise it is committed as a file under the deck\'s comments/ folder, with a pull request.' })]);
 
   // Sign-in and saving.
   const tokenIn = h('input', { type: 'password', id: 'ed-token', autocomplete: 'off', spellcheck: 'false', 'aria-label': 'GitHub token', placeholder: 'github_pat_…' });
@@ -112,9 +114,9 @@ export function createEditor(deck) {
   const repoName = repo ? `${repo.owner}/${repo.name}` : null;
   const signIn = h('div', { class: 'signin' },
     h('p', { class: 'hint' }, 'Sign in to edit. Paste a ', h('a', { href: 'https://github.com/settings/personal-access-tokens/new', target: '_blank', rel: 'noopener', text: 'fine-grained token' }),
-      ` with read and write access to Contents and Pull requests${repoName ? ' on ' + repoName : ''}. Without push access${repoName ? ' to ' + repoName : ''}, paste a `,
+      ` limited to ${repoName || 'this repository'}, with read and write access to Contents and Pull requests. Without push access${repoName ? ' to ' + repoName : ''}, a `,
       h('a', { href: 'https://github.com/settings/tokens/new', target: '_blank', rel: 'noopener', text: 'classic token' }),
-      ' with the public_repo scope instead; your edits go through your fork. The token stays in this tab only and is sent only to api.github.com.'),
+      ' with the public_repo scope works instead, and your edits go through your fork; that token can write to all your public repositories. The token is kept in memory only, until you reload or close this page, and is sent only to api.github.com.'),
     h('div', { class: 'row' }, tokenIn, signInBtn), signInMsg);
   const who = h('span', { class: 'hint' });
   const signOutBtn = h('button', { class: 'act', type: 'button', text: 'Sign out' });
@@ -131,18 +133,20 @@ export function createEditor(deck) {
     saveResult.textContent = 'This build names no repository, so it cannot save. Build with --repo owner/name.';
   }
 
-  const panel = h('aside', { id: 'editor', 'aria-label': 'Editor', hidden: true },
-    h('header', {}, h('h2', { text: 'Edit' }), closeBtn, fileLabel),
-    tablist,
+  const panel = h('aside', { id: 'editor', 'aria-label': readOnly ? 'Comments' : 'Editor', hidden: true },
+    h('header', {}, h('h2', { text: readOnly ? 'Comments' : 'Edit' }), closeBtn, fileLabel),
+    readOnly ? null : tablist,
     h('div', { style: 'min-height:0;display:grid' }, ...Object.values(panels)),
-    footer);
+    readOnly ? null : footer);
+  if (readOnly) panel.style.gridTemplateRows = 'auto minmax(0, 1fr)';
   document.body.append(panel);
   const selBtn = h('button', { id: 'sel-comment', type: 'button', hidden: true, text: 'Comment' });
   document.body.append(selBtn);
 
   /* ---------- state into the panel ---------- */
   function show(id) {
-    if (tabBtns[id].hidden) id = 'source';
+    if (readOnly) id = 'comments';
+    else if (tabBtns[id].hidden) id = 'source';
     tab = id;
     for (const [k] of TABS) {
       const on = k === id;
@@ -254,6 +258,22 @@ export function createEditor(deck) {
   });
 
   /* ---------- drawing modules ---------- */
+  // Register a slide's drawing module as a file of this session, from the
+  // published module, taking the pull request's version of it when there is one.
+  async function openDrawing(s) {
+    const path = drawPath(s);
+    const res = await fetch(new URL(s.draw, location.href).href, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const text = await res.text();
+    let f = files.get(path);
+    if (f) return f;
+    f = { path, base: text, text, built: text, kind: 'draw', draw: s.draw };
+    files.set(path, f);
+    adopt(f);
+    syncFooter();
+    if (f.text !== text) await redraw(f);
+    return f;
+  }
   async function loadDrawing() {
     const s = slide();
     const path = drawPath(s);
@@ -264,17 +284,7 @@ export function createEditor(deck) {
     if (!f) {
       drawTa.value = 'Loading…';
       try {
-        const res = await fetch(new URL(s.draw, location.href).href, { cache: 'no-store' });
-        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-        const text = await res.text();
-        f = files.get(path);
-        if (!f) {
-          f = { path, base: text, text, built: text, kind: 'draw', draw: s.draw };
-          files.set(path, f);
-          adopt(f);
-          syncFooter();
-          if (f.text !== text) await redraw(f);
-        }
+        f = await openDrawing(s);
       } catch (e) {
         drawErr.textContent = `Could not load ${s.draw}: ${e.message}`;
         return;
@@ -306,7 +316,7 @@ export function createEditor(deck) {
 
   /* ---------- signing in ---------- */
   function store() {
-    return new DeckStore({ client: new GitHubClient({ token }), repo, deckDir });
+    return new DeckStore({ client: new GitHubClient({ token: loadToken() }), repo, deckDir });
   }
   async function verify(t) {
     const me = await new GitHubClient({ token: t }).get('/user');
@@ -334,10 +344,10 @@ export function createEditor(deck) {
     busy = loading = true;
     syncFooter();
     syncComposer();
-    const t = token;
+    const t = loadToken();
     try {
       const p = await store().pending();
-      if (token !== t) return;
+      if (loadToken() !== t) return;
       mine = p && { ...p, loaded: [] };
       if (!mine) return;
       let took = false;
@@ -350,6 +360,10 @@ export function createEditor(deck) {
         else await redraw(f);
       }
       if (took && isOpen) refill();
+      for (const s of deck.model.slides) {
+        const path = drawPath(s);
+        if (path && mine && mine.files.has(path) && !files.has(path)) await openDrawing(s);
+      }
     } catch (e) {
       saveResult.textContent = `Could not check for your open pull request: ${e.message}`;
     } finally {
@@ -365,21 +379,19 @@ export function createEditor(deck) {
     signInMsg.textContent = 'Checking the token…';
     try {
       login = await verify(t);
-      token = t;
       saveToken(t);
       tokenIn.value = '';
       signInMsg.textContent = '';
     } catch (e) {
-      signInMsg.textContent = `GitHub refused the token: ${e.message}`;
+      signInMsg.textContent = e instanceof GitHubError && e.status === 401 ? `GitHub refused the token: ${e.message}` : `Could not check the token, try again: ${e.message}`;
     } finally {
       signInBtn.disabled = false;
       syncFooter();
     }
-    if (token === t) loadPending();
+    if (loadToken() === t) loadPending();
   });
   tokenIn.addEventListener('keydown', e => { if (e.key === 'Enter') signInBtn.click(); });
-  signOutBtn.addEventListener('click', () => { clearToken(); token = null; login = null; mine = null; syncFooter(); });
-  if (token && repo) verify(token).then(l => { login = l; syncFooter(); loadPending(); }, () => { clearToken(); token = null; syncFooter(); });
+  signOutBtn.addEventListener('click', () => { clearToken(); login = null; mine = null; syncFooter(); });
 
   /* ---------- saving ---------- */
   async function save() {
@@ -543,7 +555,7 @@ export function createEditor(deck) {
   }
   let pending = null;
   function onSelect() {
-    if (!isOpen) return;
+    if (!isOpen || readOnly) return;
     const a = selectionAnchor();
     pending = a;
     if (!a) { selBtn.hidden = true; return; }
@@ -575,14 +587,15 @@ export function createEditor(deck) {
     isOpen = true;
     root.classList.add('editing', 'still');
     panel.hidden = false;
-    document.getElementById('edit-btn').setAttribute('aria-pressed', 'true');
     deck.syncComments();
     fillFromSlide();
     show(opts.tab || tab);
+    if (readOnly) { closeBtn.focus({ preventScroll: true }); return; }
+    document.getElementById('edit-btn').setAttribute('aria-pressed', 'true');
     const u = new URL(location.href);
     u.searchParams.set('edit', '1');
     history.replaceState(null, '', u);
-    (opts.tab === 'comments' ? tabBtns.comments : repo && !token ? tokenIn : srcTa).focus({ preventScroll: true });
+    (opts.tab === 'comments' ? tabBtns.comments : repo && !login ? tokenIn : srcTa).focus({ preventScroll: true });
   }
   function close() {
     isOpen = false;
@@ -590,8 +603,9 @@ export function createEditor(deck) {
     if (!wasStill) root.classList.remove('still');
     panel.hidden = true;
     selBtn.hidden = true;
-    document.getElementById('edit-btn').setAttribute('aria-pressed', 'false');
     deck.syncComments();
+    if (readOnly) { document.getElementById('comments-btn').focus({ preventScroll: true }); return; }
+    document.getElementById('edit-btn').setAttribute('aria-pressed', 'false');
     const u = new URL(location.href);
     u.searchParams.delete('edit');
     history.replaceState(null, '', u);

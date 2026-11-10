@@ -4,7 +4,6 @@
 import { loadDeck } from './loader.js';
 import { mountDeck } from './runtime.js';
 import { GitHubClient, DeckStore } from './github.js';
-import { loadToken } from './auth.js';
 
 const data = JSON.parse(document.getElementById('deck-data').textContent);
 const model = loadDeck(data);
@@ -20,10 +19,10 @@ if (model.errors.length) {
 const deck = await mountDeck({ data, model, slug: data.deck.slug });
 window.sealSlides = deck;
 
-// Read-only viewers see review comments of open pull requests too. Without a
-// token this uses GitHub's unauthenticated API, which is rate limited per IP.
+// Viewers see review comments of open pull requests too. This uses GitHub's
+// unauthenticated API, which is rate limited per IP.
 if (data.repo && data.repo.owner && navigator.onLine !== false) {
-  const store = new DeckStore({ client: new GitHubClient({ token: loadToken() }), repo: data.repo, deckDir: data.deck.dir });
+  const store = new DeckStore({ client: new GitHubClient(), repo: data.repo, deckDir: data.deck.dir });
   store.listComments()
     .then(list => deck.setComments([...model.comments, ...list]))
     .catch(e => console.info('seal-slides: review comments not loaded:', e.message));

@@ -3,7 +3,9 @@ name: Preview
 # Per-PR preview of the site: deploys to the gh-pages branch under
 # /pr-preview/pr-<number>/ and keeps a sticky PR comment with the link. The
 # preview is deployed on open and update and removed when the PR closes. A
-# preview's editor commits to the PR's own branch and comments on the PR.
+# preview is read-only: it shows the slides and the PR's review comments, with
+# no sign-in, editing or saving, because it runs the PR's unreviewed drawing
+# modules on the same origin as the published site.
 on:
   pull_request:
     types: [opened, reopened, synchronize, closed]

@@ -123,7 +123,8 @@ const stamp = d => d.toISOString().replace(/\.\d+Z$/, 'Z').replace(/[-:]/g, '').
 
 // One deck in one repository, as the page was built: repo is
 // { owner, name, ref, sha, pr } where ref is the branch the page was built
-// from, sha its commit and pr the pull request a preview belongs to.
+// from, sha its commit and pr the pull request a preview belongs to. A
+// preview is read-only: it lists its pull request's comments and saves nothing.
 export class DeckStore {
   constructor({ client, repo, deckDir, now = () => new Date(), sleep = ms => new Promise(r => setTimeout(r, ms)) }) {
     this.client = client;
@@ -160,9 +161,8 @@ export class DeckStore {
     throw new Error(`the fork ${fork.owner}/${fork.name} is not ready yet; try again in a minute`);
   }
 
-  // The open pull request the viewer's edits go to, if there is one: the
-  // preview's own when they can push to it, otherwise the one this editor
-  // opened for them earlier. It never forks.
+  // The open pull request the viewer's edits go to, if there is one: the one
+  // this editor opened for them earlier. It never forks.
   async lookup() {
     const c = this.client;
     const me = await this.viewer();
@@ -170,17 +170,10 @@ export class DeckStore {
     const canPush = !!(info.permissions && info.permissions.push);
     const baseRef = this.repo.ref || info.default_branch;
     const here = p => p.head.repo.full_name === this.full;
-    let pr = null;
-    if (this.repo.pr) {
-      const pull = await c.get(`${this.base}/pulls/${this.repo.pr}`);
-      if (pull.state === 'open' && canPush && pull.head.repo && here(pull)) pr = pull;
-    }
-    if (!pr) {
-      const prefix = `seal-slides/${this.slug}/`;
-      const pulls = await c.get(`${this.base}/pulls?state=open&per_page=100`);
-      pr = pulls.find(p => p.user && p.user.login === me.login && p.head.ref.startsWith(prefix) &&
-        p.head.repo && here(p) === canPush && p.base.ref === baseRef) || null;
-    }
+    const prefix = `seal-slides/${this.slug}/`;
+    const pulls = await c.get(`${this.base}/pulls?state=open&per_page=100`);
+    const pr = pulls.find(p => p.user && p.user.login === me.login && p.head.ref.startsWith(prefix) &&
+      p.head.repo && here(p) === canPush && p.base.ref === baseRef) || null;
     const home = pr && !canPush ? { owner: pr.head.repo.owner.login, name: pr.head.repo.name } : { owner: this.repo.owner, name: this.repo.name };
     return { me, info, canPush, baseRef, pr, home };
   }
@@ -294,16 +287,10 @@ export class DeckStore {
     if (!body || !body.trim()) throw new Error('the comment is empty');
     const c = this.client;
     const me = await this.viewer();
-    let candidates;
-    if (this.repo.pr) {
-      const pull = await c.get(`${this.base}/pulls/${this.repo.pr}`);
-      candidates = pull.state === 'open' ? [pull] : [];
-    } else {
-      const pulls = await c.get(`${this.base}/pulls?state=open&per_page=30`);
-      const prefix = `seal-slides/${this.slug}/`;
-      const rank = p => (p.user && p.user.login === me.login ? 0 : 1) + (p.head.ref.startsWith(prefix) ? 0 : 2);
-      candidates = pulls.slice(0, 10).sort((a, b) => rank(a) - rank(b));
-    }
+    const pulls = await c.get(`${this.base}/pulls?state=open&per_page=100`);
+    const prefix = `seal-slides/${this.slug}/`;
+    const rank = p => (p.user && p.user.login === me.login ? 0 : 1) + (p.head.ref.startsWith(prefix) ? 0 : 2);
+    const candidates = pulls.sort((a, b) => rank(a) - rank(b)).slice(0, 10);
     for (const pull of candidates) {
       const files = await c.get(`${this.base}/pulls/${pull.number}/files?per_page=100`);
       const f = files.find(x => x.filename === anchor.file && x.status !== 'removed');

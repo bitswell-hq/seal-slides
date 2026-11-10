@@ -7,7 +7,8 @@
 // Usage: node scripts/build.mjs [--decks decks] [--out site]
 //          [--repo owner/name] [--ref branch] [--sha commit] [--pr number]
 // The repository fields tell the editor where to save; they default to the
-// SEAL_SLIDES_* environment variables, then to the local git checkout.
+// SEAL_SLIDES_* environment variables, then to the local git checkout. --pr
+// builds a read-only preview of that pull request: no editing, its comments shown.
 
 import { readFile, writeFile, mkdir, readdir, rm, copyFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -227,7 +228,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       repo,
     });
     for (const d of summary) console.log(`built ${d.slug}: ${d.slides} slides`);
-    if (repo) console.log(`editor saves to ${repo.owner}/${repo.name}${repo.ref ? ' from ' + repo.ref : ''}${repo.pr ? ' (pull request ' + repo.pr + ')' : ''}`);
+    if (repo && repo.pr) console.log(`read-only preview of ${repo.owner}/${repo.name} pull request ${repo.pr}`);
+    else if (repo) console.log(`editor saves to ${repo.owner}/${repo.name}${repo.ref ? ' from ' + repo.ref : ''}`);
   } catch (e) {
     console.error(e.message);
     process.exit(1);
