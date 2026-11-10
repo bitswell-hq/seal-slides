@@ -180,7 +180,7 @@ The token is kept in the page's memory only and is sent only to `api.github.com`
 
 Keeping the token in memory does not put it out of reach of everything. Who can read it:
 
-- Any script that runs in the deck page: the engine, the deck's drawing modules as published, and the text you type into the Drawing tab when you press Redraw. HTML in slide text is cleaned so that it runs no script in the page (see Markdown slides above).
+- Any script that runs in the deck page: the engine, the deck's drawing modules as published, and the text you type into the Drawing tab when you press Redraw. HTML in slide text is cleaned so that it runs no script in the page (see The Markdown slide format above).
 - A page of the same origin that holds a handle on the deck's window, because it framed or opened it. The editor therefore offers no sign-in when the page is inside a frame or has an opener, and shows a message instead of the token field. This check stands in for a `frame-ancestors 'none'` response header: GitHub Pages cannot send headers, and a `<meta>` Content Security Policy cannot set `frame-ancestors`. It is a best effort, since a same-origin page that opened the deck can clear the opener before the check runs.
 
 So the token is as safe as the pages published on that origin are; sign in only where you trust them.
